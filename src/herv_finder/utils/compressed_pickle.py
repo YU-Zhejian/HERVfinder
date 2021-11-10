@@ -17,7 +17,7 @@ import pickle
 from typing import Any
 
 
-def dump(obj:Any, output_path:str) -> None:
+def dump(obj: Any, output_path: str) -> None:
     """
     Pickle the object.
 
@@ -26,19 +26,22 @@ def dump(obj:Any, output_path:str) -> None:
     :return: None
     """
     with lzma.open(output_path, 'wb') as writer:
-        pickle.dump(obj,writer)
+        pickle.dump(obj, writer)
 
-def load(input_path:str) -> Any:
+
+def load(input_path: str) -> Any:
     """
     Unpickle the object.
 
     :param input_path: Input path of pickled object.
     :return: The object.
     """
-    with lzma.open(input_path,'rb') as reader:
+    with lzma.open(input_path, 'rb') as reader:
         reto = pickle.load(reader)
     return reto
 
+
 if __name__ == '__main__':
     import doctest
+
     doctest.testmod()
