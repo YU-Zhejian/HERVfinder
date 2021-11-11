@@ -5,7 +5,7 @@ import os.path
 import requests
 from tqdm import tqdm
 
-logging.basicConfig()
+logging.basicConfig(level=logging.INFO)
 logger_handler = logging.getLogger()
 
 

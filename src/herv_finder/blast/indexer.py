@@ -1,17 +1,21 @@
 """A general-purposed multi-processed BLAST index creator"""
 import glob
 import logging
-import math
 import multiprocessing
 import os
+import pickle
 import tempfile
+import threading
 from typing import Tuple, Dict, Optional, Iterator, List
 
-logging.basicConfig(level=logging.DEBUG)
-logger_handler = logging.getLogger()
+import tqdm
 
-from herv_finder.utils.compressed_pickle import dump, load
+from herv_finder.utils import multiprocess_helper
+from herv_finder.utils import compressed_pickle
 from herv_finder.utils.in_memory_fasta import Fasta, get_reversed_complementary
+
+logging.basicConfig(level=logging.INFO)
+logger_handler = logging.getLogger()
 
 blast_index_type = Dict[bytes, List[Tuple[str, bool, int]]]
 """
@@ -64,15 +68,28 @@ class _WorkerProcess(multiprocessing.Process):
                 tmp_dict[bytes_window] = []
             tmp_dict[bytes_window].append(((self.chromosome_name, self.strand, self.start_pos + bytes_window_start)))
             # print(self.pid, (self.chromosome_name, self.strand, self.start_pos+ bytes_window_start))
-        dump_target = os.path.join(self.tmp_dir, str(self.pid) + ".pkl.xz")
+        dump_target = os.path.join(self.tmp_dir, str(self.pid) + ".pkl")
         logger_handler.debug(f"Worker PID: {self.pid} dumping to {dump_target}..")
-        dump(tmp_dict, dump_target)
+        pickle.dump(tmp_dict, open(dump_target,'wb'))
         logger_handler.debug(f"Worker PID: {self.pid} FIN")
         os.kill(self.pid, 9)  # Suicide
 
+class _MergeWorkerThread(threading.Thread):
+    def __init__(self, filename:str, out_dict:dict, merge_mutex:threading.Lock):
+        super().__init__()
+        self.filename = filename
+        self.out_dict = out_dict
+        self.merge_mutex=merge_mutex
+
+    def run(self):
+        # logger_handler.debug(f"Loading from {self.filename}..")
+        tmpd = pickle.load(open(self.filename, 'rb'))
+        os.remove(self.filename)
+        with self.merge_mutex:
+            self.out_dict.update(tmpd)
 
 class BlastIndex():
-    def __init__(self, pool_len: Optional[int] = os.cpu_count()):
+    def __init__(self, pool_len: Optional[int] = multiprocessing.cpu_count()):
         logger_handler.info("BlastIndex initializing...")
         self._index = {}
         """The real index"""
@@ -98,34 +115,55 @@ class BlastIndex():
 
         self.index_length = index_length
         self._index = {}
-        for chromosome_name in self._fasta_obj.chromosomes:
-            self._index.update(self._create_index_for_chromosome(chromosome_name=chromosome_name))
 
-    def write_index(self, dest_filename: str):
-        dump(self._index, dest_filename)
+        pool = multiprocess_helper.MPJobQueue(pool_size=self._pool_len, with_tqdm=True)
+        """The pool of process"""
 
-    def read_index(self, from_filename: str):
-
-        self._index = load(from_filename)
-        self.index_length=len(self._index.keys()[0])
-
-    def get_stats(self):
-        print(f"Index length: {self.index_length}")
-        value_len_dir={}
-        for v in self._index.values():
-            v_len = len(v)
-            if v_len not in value_len_dir:
-                value_len_dir[v_len] =0
-            value_len_dir[v_len]+=1
-        value_len_sum = sum(value_len_dir.values())
-        print(f"value len distribution: {value_len_dir}, sum {value_len_sum}, mean {value_len_sum/len(value_len_dir)}")
-
-    def _create_index_for_chromosome(self, chromosome_name: str) -> blast_index_type:
         tmp_dir = tempfile.mkdtemp()
         """Temporary directory for index files"""
 
-        logger_handler.info(f"Creating index for chromosome {chromosome_name}")
-        """Create index for a particular chromosome."""
+        for chromosome_name in self._fasta_obj.chromosomes:
+            self._submit_create_index_job_for_chromosome(chromosome_name=chromosome_name, tmp_dir=tmp_dir, pool=pool)
+
+        pool.start()
+        pool.join()
+
+        logger_handler.info("Merging indicies...")
+        merge_pool=[]
+        merge_mutex = threading.Lock()
+
+        for filename in glob.glob(os.path.join(tmp_dir, "*.pkl")):
+            merge_pool.append(_MergeWorkerThread(filename=filename, out_dict=self._index, merge_mutex = merge_mutex))
+            merge_pool[-1].start()
+        for thread in tqdm.tqdm(iterable=merge_pool):
+            thread.join()
+        os.rmdir(tmp_dir)
+
+
+    def write_index(self, dest_filename: str):
+        logger_handler.info(f"Writing index to {dest_filename}...")
+        compressed_pickle.dump(self._index, dest_filename)
+        logger_handler.info(f"Writing index to {dest_filename} FIN")
+
+    def read_index(self, from_filename: str):
+        logger_handler.info(f"Reading index from {from_filename}...")
+        self._index = compressed_pickle.load_with_tqdm(from_filename)
+        self.index_length = len(list(self._index.keys())[0])
+        logger_handler.info(f"Reading index from {from_filename} FIN")
+
+    def get_stats(self):
+        print(f"Index length: {self.index_length}")
+        value_len_dir = {}
+        for v in self._index.values():
+            v_len = len(v)
+            if v_len not in value_len_dir:
+                value_len_dir[v_len] = 0
+            value_len_dir[v_len] += 1
+        value_len_sum = sum(value_len_dir.values())
+        print(f"value len distribution: {value_len_dir}, sum {value_len_sum}, mean {value_len_sum / len(self._index)}")
+
+    def _submit_create_index_job_for_chromosome(self, chromosome_name: str,tmp_dir:str, pool:multiprocess_helper.MPJobQueue) -> None:
+        """Submit index creation job for a particular chromosome."""
 
         # The forward strand
         fasta_bytes = self._fasta_obj.get(chromosome_name)
@@ -137,15 +175,11 @@ class BlastIndex():
         total_len = len(fasta_bytes)
         """Total length of this chromosome"""
 
-        chunk_len = math.ceil(total_len / self._pool_len)
+        chunk_len = 100000
         """Length of each chunk"""
 
-        # Split the job
-        pool = []
-        """The pool of process"""
-
-        # Start the jobs
-        for i in range(self._pool_len):
+        # Submit the jobs
+        for i in range(total_len // chunk_len + 1):
             new_worker = _WorkerProcess(chromosome_name=chromosome_name,
                                         strand=True,
                                         fasta_bytes=fasta_bytes[chunk_len * i:chunk_len * (i + 1) + self.index_length],
@@ -153,10 +187,7 @@ class BlastIndex():
                                         start_pos=chunk_len * i,
                                         length=chunk_len + self.index_length,
                                         tmp_dir=tmp_dir)
-            new_worker.start()
             pool.append(new_worker)
-        for process in pool:
-            process.join()
         for i in range(self._pool_len):
             new_worker_rc = _WorkerProcess(chromosome_name=chromosome_name,
                                            strand=False,
@@ -166,23 +197,14 @@ class BlastIndex():
                                            start_pos=chunk_len * i,
                                            length=chunk_len + self.index_length,
                                            tmp_dir=tmp_dir)
-            new_worker_rc.start()
             pool.append(new_worker_rc)
-        for process in pool:
-            process.join()
-        retd = {}
-        for filename in glob.glob(os.path.join(tmp_dir, "*.pkl.xz")):
-            logger_handler.debug(f"Loading from {filename}..")
-            tmpd = load(filename)
-            os.remove(filename)
-            # print(tmpd.__str__()[1:20])
-            retd.update(tmpd)
-        os.rmdir(tmp_dir)
-        return retd
+
 
 
 if __name__ == '__main__':
     bi = BlastIndex()
     bi.create_index('test/sequence.fasta')
     bi.get_stats()
-    bi.write_index('test/test.pkl.xz')
+    # bi.write_index('test/test.pkl.xz')
+    # bj = BlastIndex()
+    # bj.read_index('test/test.pkl.xz')

@@ -9,7 +9,7 @@ from typing import Optional, List
 _FASTA_TRANS = bytes.maketrans(b'ATCGatcgNnXx', b'TAGCtagcNnXx')
 """The fasta translator dictionary"""
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger_handler = logging.getLogger()
 
 
