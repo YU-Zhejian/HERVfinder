@@ -6,8 +6,11 @@ import logging
 import os.path
 from typing import Optional, List
 
-_FASTA_TRANS = bytes.maketrans(b'ATCGatcgNnXx', b'TAGCtagcNnXx')
-"""The fasta translator dictionary"""
+_FASTA_COMP_TRANS = bytes.maketrans(b'ATCGatcgNnXx', b'TAGCtagcNnXx')
+"""The fasta complementary translator dictionary"""
+
+_FASTA_REMOVE_LOWCASE_TRANS = bytes.maketrans(b'atcgnx', b'ATCGNX')
+"""The fasta low-to-high translator dictionary"""
 
 logging.basicConfig(level=logging.INFO)
 logger_handler = logging.getLogger()
@@ -51,6 +54,8 @@ class Fasta:
         The content of fasta. Format:  Dict[str, bytes]
         """
 
+        self._fasta_content_rc = {}
+
         self._load()
         logger_handler.info(f"FASTA load complete")
 
@@ -71,7 +76,8 @@ class Fasta:
                 if line.startswith(b'>'):
                     if chromosome_name != "":
                         logger_handler.debug(f"Chromosome {chromosome_name} FIN")
-                        self._fasta_content[chromosome_name] = bytes(seq)
+                        self._fasta_content[chromosome_name] = bytes(seq).translate(_FASTA_REMOVE_LOWCASE_TRANS)
+
                         seq = bytearray()
                     chromosome_name = str(line[1:].strip(), encoding='UTF-8')
                     logger_handler.debug(f"New chromosome {chromosome_name}")
@@ -79,15 +85,23 @@ class Fasta:
                     seq.extend(line)
             if chromosome_name != '':
                 logger_handler.debug(f"Chromosome {chromosome_name} FIN")
-                self._fasta_content[chromosome_name] = bytes(seq)
+                self._fasta_content[chromosome_name] = bytes(seq).translate(_FASTA_REMOVE_LOWCASE_TRANS)
+            for chromosome_name in self._fasta_content.keys():
+                self._fasta_content_rc[chromosome_name] = get_reversed_complementary(
+                    self._fasta_content[chromosome_name])
 
-    def get(self, chromosome_name: str, start: Optional[int] = 0, end: Optional[int] = -1) -> bytes:
+    def get(self, chromosome_name: str, start: Optional[int] = 0, end: Optional[int] = -1,
+            strand: bool = True) -> bytes:
         """Get a 0-based [) sequence for random access. If end = -1, will put all sequences till end."""
+
         if chromosome_name not in self._fasta_content:
             raise KeyError(f"Illegal chromosome name {chromosome_name}")
         if end == -1:
             end = len(self._fasta_content[chromosome_name])
-        return self._fasta_content[chromosome_name][start:end]
+        if strand:
+            return self._fasta_content[chromosome_name][start:end]
+        else:
+            return self._fasta_content_rc[chromosome_name][start:end]
 
     @property
     def chromosomes(self) -> List[str]:
@@ -95,7 +109,7 @@ class Fasta:
 
 
 def get_reversed_complementary(fasta_bytes: bytes) -> bytes:
-    return fasta_bytes.translate(_FASTA_TRANS)[::-1]
+    return fasta_bytes.translate(_FASTA_COMP_TRANS)[::-1]
 
 
 if __name__ == "__main__":
