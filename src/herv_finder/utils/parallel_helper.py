@@ -93,50 +93,52 @@ class MultiProcessingJobQueue(threading.Thread):
                  return_function:Callable = None):
         super().__init__()
         self.pool_size = pool_size
-        self._job_queue = []
+        self.pending_job_queue = []
         self._is_terminated = False
         self._max_queue_len = 0
         self.with_tqdm = with_tqdm
         self.pool_name = pool_name
+        self.running_job_queue = []
 
     def run(self):
         def _scan_through_process():
             """
             Scan through all processes and terminate the exited process.
             """
-            for process in active_processes:
+            for process in self.running_job_queue:
                 if process.exitcode is not None:
                     process.join()
                     process.close()
                     gc.collect()
-                    active_processes.remove(process)
+                    self.running_job_queue.remove(process)
                     pbar.update(1)
 
-        active_processes = []
         if self.with_tqdm:
             pbar = tqdm.tqdm(desc=self.pool_name, total=self._max_queue_len)
         else:
             pbar = _DumbTQDM()
-        while len(self._job_queue) > 0 and not self._is_terminated:
-            while len(self._job_queue) > 0 and len(active_processes) < self.pool_size:
-                active_processes.append(self._job_queue.pop(0))
-                active_processes[-1].start()
+        while len(self.pending_job_queue) > 0 and not self._is_terminated:
+            while len(self.pending_job_queue) > 0 and len(self.running_job_queue) < self.pool_size:
+                new_processs = self.pending_job_queue[0]
+                self.pending_job_queue.remove(new_processs)
+                new_processs.start()
+                self.running_job_queue.append(new_processs)
             _scan_through_process()
             time.sleep(0.1)
-        while len(active_processes) > 0 and not self._is_terminated:
+        while len(self.running_job_queue) > 0 and not self._is_terminated:
             _scan_through_process()
             time.sleep(0.1)
         pbar.close()
         self._is_terminated = True
 
     def __len__(self):
-        return len(self._job_queue)
+        return len(self.pending_job_queue)
 
     def stop(self):
         self._is_terminated = True
 
     def add(self, mp_instance: multiprocessing.Process):
-        self._job_queue.append(mp_instance)
+        self.pending_job_queue.append(mp_instance)
         self._max_queue_len += 1
 
     def append(self, *args, **kwargs):

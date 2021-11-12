@@ -3,8 +3,11 @@ import copy
 import gc
 import logging
 import multiprocessing
+import queue
+import signal
+import time
 from collections import defaultdict
-from typing import Tuple, Dict, Optional, Set
+from typing import Tuple, Dict, Optional, Set, Union
 
 import tqdm
 
@@ -26,7 +29,7 @@ index_item -> [chromosome_name, strand, offset]
 strand is True for default and False for reversed.
 """
 
-DEFAULT_INDEX_LEN = 11
+DEFAULT_INDEX_LEN = 4
 """Index length of nucleotides"""
 
 DEFAULT_CHUNK_LEN = 2000000
@@ -59,7 +62,7 @@ class _IndexWorkerProcess(multiprocessing.Process):
                  fasta_bytes: bytes,
                  index_len: int,
                  start_pos: int,
-                 tmp_dir: list
+                 tmp_dir: multiprocessing.Queue
                  ):
         """
         The worker of index creator. Will create index for both forward and reverse strand.
@@ -82,6 +85,7 @@ class _IndexWorkerProcess(multiprocessing.Process):
         self.logger_handler.debug(self.__repr__())
         self.tmp_dict = defaultdict(lambda: set())
 
+
     def run(self):
         self.logger_handler.debug(f"Worker PID: {self.pid} started")
         for bytes_window_start in range(len(self.fasta_bytes) - self.index_len + 1):
@@ -96,14 +100,7 @@ class _IndexWorkerProcess(multiprocessing.Process):
             self.tmp_dict[bytes_window].add(
                 (self.chromosome_name, self.strand, self.start_pos + bytes_window_start)
             )
-
-        # dump_target = os.path.join(self.tmp_dir, str(self.pid) + ".pkl")
-        # logger_handler.debug(f"Worker PID: {self.pid} dumping to {dump_target}...")
-        # pickle.dump(dict(self.tmp_dict), open(dump_target, 'wb'))
-        # logger_handler.debug(f"Worker PID: {self.pid} FIN")
-        # os.kill(self.pid, 9)  # Suicide
-        self.tmp_dir.append(dict(self.tmp_dict))
-        # del self.tmp_dict
+        self.tmp_dir.put(dict(self.tmp_dict))
 
     def __repr__(self):
         try:
@@ -113,22 +110,40 @@ class _IndexWorkerProcess(multiprocessing.Process):
             return "Worker under construction"
 
 
-# class _MergeWorkerThread(threading.Thread):
-#     """
-#     Multi-thread merger. Accelerate the process by asynchronously load the dump.
-#     """
-#     def __init__(self, filename: str):
-#         super().__init__()
-#         self.filename = filename
-#         self.temp_dict = None
-#
-#     def run(self):
-#         logger_handler.debug(f"Merging from {self.filename}..")
-#         self.temp_dict = pickle.load(open(self.filename, 'rb'))
-#         os.remove(self.filename)
-#     def get_return_value(self):
-#         return self.temp_dict
-#
+class _MergeWorkerProcess(multiprocessing.Process):
+    def __init__(self,
+                 input_queue: multiprocessing.Queue,
+                 output_list: list,
+                 supervising_pool: parallel_helper.MultiProcessingJobQueue
+                 ):
+        super().__init__()
+        self.logger_handler = logging.getLogger("Merger")
+        self.input_queue = input_queue
+        self.output_list = output_list
+        self.multiprocessing = supervising_pool
+        self.merged_dict = {}
+        self.is_terminated = False
+        signal.signal(signal.SIGTERM, self.sigterm)
+
+    def run(self):
+        time.sleep(1)
+        self.logger_handler.info("Started")
+        while not self.is_terminated:
+            try:
+                get_item = self.input_queue.get(block=False, timeout=0.1)
+            except queue.Empty:
+                continue
+            except TimeoutError:
+                continue
+            self.logger_handler.info("Got finished process! Start merging...")
+            self.merged_dict = _blast_index_merge(get_item, self.merged_dict)
+            del get_item
+        self.logger_handler.info("FIN recv, transmitting...")
+        self.output_list.append(self.merged_dict)
+        self.logger_handler.info("FIN")
+
+    def sigterm(self, *args, **kwargs):
+        self.is_terminated = True
 
 class BlastIndex:
     def __init__(self, pool_len: Optional[int] = multiprocessing.cpu_count()):
@@ -168,9 +183,11 @@ class BlastIndex:
         """The pool of process"""
 
         sync_manager = multiprocessing.Manager()
-        # public_namespace = sync_manager.Namespace()
-        # public_namespace.index = {}
         public_index = sync_manager.list()
+        public_queue = queue.Queue(maxsize=-1)
+        # Do not use multiprocessing.Queue.
+        new_worker_merger = _MergeWorkerProcess(public_queue, public_index, pool)
+        new_worker_merger.start()
         for chromosome_name in self._fasta_obj.chromosomes:
             """Submit index creation job for a particular chromosome."""
             # The forward strand
@@ -185,42 +202,35 @@ class BlastIndex:
 
             # Submit the jobs
             for i in range(total_len // chunk_len + 1):
-                input_fasta_bytes = fasta_bytes[chunk_len * i:chunk_len * (i + 1) + self.index_len - 1]
+                input_fasta_bytes = fasta_bytes[
+                                    chunk_len * i:chunk_len * (i + 1) + self.index_len - 1
+                                    ]
                 new_worker = _IndexWorkerProcess(chromosome_name=chromosome_name,
                                                  strand=True,
                                                  fasta_bytes=input_fasta_bytes,
                                                  index_len=self.index_len,
                                                  start_pos=chunk_len * i,
-                                                 tmp_dir=public_index)
+                                                 tmp_dir=public_queue)
                 pool.append(new_worker)
                 new_worker_rc = _IndexWorkerProcess(chromosome_name=chromosome_name,
                                                     strand=False,
                                                     fasta_bytes=input_fasta_bytes,
                                                     index_len=self.index_len,
                                                     start_pos=chunk_len * i,
-                                                    tmp_dir=public_index)
+                                                    tmp_dir=public_queue)
                 pool.append(new_worker_rc)
 
         pool.start()
         pool.join()
+        new_worker_merger.terminate()
+        new_worker_merger.join()
 
-        tmpd = {}
-        for item in tqdm.tqdm(desc="Merging", iterable=public_index):
-            tmpd = _blast_index_merge(item, tmpd)
-            del item
-        self._indicies = [tmpd]
+
+        self._indicies = public_index
         del public_index
+        new_worker_merger.close()
         gc.collect()
         self._update_total_index_count()
-        # futures = []
-        # executor = concurrent.futures.ThreadPoolExecutor(max_workers=self._pool_len)
-        # logger_handler.info("Submitting unpickle jobs...")
-        # for filename in glob.glob(os.path.join(tmp_dir, "*.pkl")):
-        #     futures.append(executor.submit(pickle.load, open(filename, 'rb')))
-        #     # temp_dicts = list(executor.map(lambda filename: (),)))
-        # logger_handler.info("Unpickling...")
-        # executor.shutdown()
-        # self._indicies = [ temp_dict.result() for temp_dict in tqdm.tqdm(desc="Merging", iterable=futures) ]
 
     def show_index(self) -> str:
         rets = ""
@@ -245,9 +255,14 @@ class BlastIndex:
     def get_stats(self):
         """Print statistics of this index"""
         print(f"Index length: {self.index_len}")
-        value_len_dir = defaultdict(lambda: 0)
         self._update_total_index_count()
-        value_len_sum = sum(value_len_dir.values())
+        value_len_dir = defaultdict(lambda: 0)
+        value_len_sum = 0
+        for index in self._indicies:
+            for v in index.values():
+                v_len = len(v)
+                value_len_dir[v_len] += 1
+            value_len_sum += sum(value_len_dir.values())
         print(
             f"Value len distribution: {value_len_dir}, sum {value_len_sum}, mean {value_len_sum / self.total_index_count}")
 
@@ -260,10 +275,12 @@ class BlastIndex:
             for index in self._indicies:
                 for k, v in index.items():
                     for location in v:
-                        assert self._fasta_obj.get(chromosome_name=location[0], start=location[2],
-                                                   end=location[2] + self.index_len, strand=location[1]) == k
-
-                    pbar.update(1)
+                        assert self._fasta_obj.get(
+                            chromosome_name=location[0],
+                            start=location[2],
+                            end=location[2] + self.index_len,
+                            strand=location[1]) == k
+                        pbar.update(1)
 
     def get_pos(self, fasta_bytes: bytes) -> blast_index_data_type:
         rets = set()
@@ -277,15 +294,16 @@ class BlastIndex:
     def _update_total_index_count(self):
         self.total_index_count = 0
         for index in self._indicies:
-            self.total_index_count += len(index)
+            for v in index.values():
+                self.total_index_count += len(v)
 
 
 if __name__ == '__main__':
     bi = BlastIndex()
-    bi.create_index('test/test.fasta')
+    bi.create_index('test/e_coli.fasta')
     # print(bi.show_index())
     bi.valid_index()
-    # bi.get_stats()
+    bi.get_stats()
     # bi.write_index('test/test.pkl.xz')
     # bj = BlastIndex()
     # bj.read_index('test/test.pkl.xz')
