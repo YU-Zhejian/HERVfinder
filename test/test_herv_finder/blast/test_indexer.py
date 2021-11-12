@@ -3,12 +3,10 @@ import os
 import pickle
 import random
 import tempfile
-import threading
 from collections import defaultdict
 
 from herv_finder.blast.indexer import _IndexWorkerProcess, blast_index_type, _is_low_complexity, \
     _blast_index_merge
-from herv_finder.utils import parallel_helper
 
 test_std_dict1 = {
     b"AAA": {("1", True, 3), ("1", True, 4)},
@@ -27,11 +25,12 @@ test_std_dict4 = {
     b"CCC": {("1", True, 5), ("1", False, 4)}
 }
 
-full_merged_answer={
+full_merged_answer = {
     b"AAA": {("1", True, 3), ("1", True, 4)},
     b"BBB": {("1", True, 3), ("1", False, 4)},
     b"CCC": {("1", True, 3), ("1", False, 4), ("1", True, 5)}
 }
+
 
 def test_std_merger():
     test_std_merged_dict = _blast_index_merge(test_std_dict1, test_std_dict2)
@@ -39,6 +38,7 @@ def test_std_merger():
     test_std_merged_dict = _blast_index_merge(test_std_merged_dict, test_std_dict3)
     test_std_merged_dict = _blast_index_merge(test_std_merged_dict, test_std_dict4)
     assert test_std_merged_dict == full_merged_answer
+
 
 #
 # def test_pickle_merge_with_std_dict():
@@ -117,7 +117,6 @@ def test_same_worker_produces_same_outcome():
     assert p_outcome[1] == merged_dict
     assert merged_dict == brute_force_indexer_single_strand(fasta_bytes=full_length_fasta_bytes, index_len=index_len)
     os.rmdir(tmp_dir)
-
 
 # def test_merged_worker_produces_same_outcome():
 #     tmp_dir = tempfile.mkdtemp()
