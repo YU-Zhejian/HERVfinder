@@ -54,8 +54,6 @@ class Fasta:
         The content of fasta. Format:  Dict[str, bytes]
         """
 
-        self._fasta_content_rc = {}
-
         self._load()
         logger_handler.info(f"FASTA load complete")
 
@@ -86,9 +84,6 @@ class Fasta:
             if chromosome_name != '':
                 logger_handler.debug(f"Chromosome {chromosome_name} FIN")
                 self._fasta_content[chromosome_name] = bytes(seq).translate(_FASTA_REMOVE_LOWCASE_TRANS)
-            for chromosome_name in self._fasta_content.keys():
-                self._fasta_content_rc[chromosome_name] = get_reversed_complementary(
-                    self._fasta_content[chromosome_name])
 
     def get(self, chromosome_name: str, start: Optional[int] = 0, end: Optional[int] = -1,
             strand: bool = True) -> bytes:
@@ -101,7 +96,7 @@ class Fasta:
         if strand:
             return self._fasta_content[chromosome_name][start:end]
         else:
-            return self._fasta_content_rc[chromosome_name][start:end]
+            return get_reversed_complementary(self._fasta_content[chromosome_name][start:end])
 
     @property
     def chromosomes(self) -> List[str]:

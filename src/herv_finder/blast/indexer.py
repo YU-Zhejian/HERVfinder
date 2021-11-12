@@ -15,7 +15,7 @@ import tqdm
 
 from herv_finder.utils import compressed_pickle
 from herv_finder.utils import parallel_helper
-from herv_finder.utils.in_memory_fasta import Fasta
+from herv_finder.utils import in_memory_fasta
 
 logging.basicConfig(level=logging.INFO)
 logger_handler = logging.getLogger()
@@ -32,7 +32,7 @@ strand is True for default and False for reversed.
 DEFAULT_INDEX_LEN = 11
 """Index length of nucleotides"""
 
-DEFAULT_CHUNK_LEN = 100000
+DEFAULT_CHUNK_LEN = 1000000
 """Default chunk length"""
 
 
@@ -79,6 +79,8 @@ class _IndexWorkerProcess(multiprocessing.Process):
         self.index_len = index_len
         self.fasta_bytes = fasta_bytes
         self.strand = strand
+        if not self.strand:
+            self.fasta_bytes= in_memory_fasta.get_reversed_complementary(self.fasta_bytes)
         self.chromosome_name = chromosome_name
         self.tmp_dir = tmp_dir
         self.logger_handler = logging.getLogger()
@@ -151,7 +153,7 @@ class BlastIndex:
         :param index_len: The length (k of the k-mer) of the index.
         """
         logger_handler.info(f"Creating index from {fasta_filename}...")
-        self._fasta_obj = Fasta(fasta_filename)
+        self._fasta_obj = in_memory_fasta.Fasta(fasta_filename)
 
         self.index_len = index_len
         self._index = {}
@@ -218,9 +220,6 @@ class BlastIndex:
         fasta_bytes = self._fasta_obj.get(chromosome_name)
         """The chromosome in bytes"""
 
-        rc_fasta_bytes = self._fasta_obj.get(chromosome_name, strand=False)
-        """Reverse-complementary of fasta_bytes"""
-
         total_len = len(fasta_bytes)
         """Total length of this chromosome"""
 
@@ -229,18 +228,17 @@ class BlastIndex:
 
         # Submit the jobs
         for i in range(total_len // chunk_len + 1):
+            input_fasta_bytes = fasta_bytes[chunk_len * i:chunk_len * (i + 1) + self.index_len - 1]
             new_worker = _IndexWorkerProcess(chromosome_name=chromosome_name,
                                              strand=True,
-                                             fasta_bytes=fasta_bytes[
-                                                         chunk_len * i:chunk_len * (i + 1) + self.index_len - 1],
+                                             fasta_bytes=input_fasta_bytes,
                                              index_len=self.index_len,
                                              start_pos=chunk_len * i,
                                              tmp_dir=tmp_dir)
             pool.append(new_worker)
             new_worker_rc = _IndexWorkerProcess(chromosome_name=chromosome_name,
                                                 strand=False,
-                                                fasta_bytes=rc_fasta_bytes[
-                                                            chunk_len * i:chunk_len * (i + 1) + self.index_len - 1],
+                                                fasta_bytes=input_fasta_bytes,
                                                 index_len=self.index_len,
                                                 start_pos=chunk_len * i,
                                                 tmp_dir=tmp_dir)
@@ -262,7 +260,7 @@ class BlastIndex:
 
 if __name__ == '__main__':
     bi = BlastIndex()
-    bi.create_index('test/sequence.fasta')
+    bi.create_index('test/test.fasta')
     # print(bi.show_index())
     bi.valid_index()
     bi.get_stats()

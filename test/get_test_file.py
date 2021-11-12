@@ -30,7 +30,7 @@ def download_file(dest_filename: str, url: str):
 
 
 def get_chr1_chr2_fasta():
-    final_test_fa_filename = "test.fa"
+    final_test_fa_filename = "test.fasta"
     if os.path.exists(final_test_fa_filename):
         return
     with open(final_test_fa_filename, 'wb') as writer:
@@ -46,9 +46,26 @@ def get_chr1_chr2_fasta():
                         break
                     writer.write(contents_to_write)
 
+def get_e_coli_fasta():
+    url = 'https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz'
+    final_test_fa_filename = "e_coli.fasta"
+    if os.path.exists(final_test_fa_filename):
+        return
+    with open(final_test_fa_filename, 'wb') as writer:
+        gzipped_filename = "e_coli.fasta.gz"
+        if not os.path.exists(gzipped_filename):
+            download_file(gzipped_filename, url)
+            with gzip.open(gzipped_filename, 'rb') as reader:
+                while True:
+                    contents_to_write = reader.read(1024)
+                    if not contents_to_write:
+                        break
+                    writer.write(contents_to_write)
 
 def main():
     get_chr1_chr2_fasta()
+    get_e_coli_fasta()
+
 
 
 if __name__ == '__main__':
