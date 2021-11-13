@@ -17,7 +17,7 @@ def download_file(dest_filename: str, url: str):
     This code uses codes in https://www.simplifiedpython.net/python-download-file/
     """
     global logger_handler
-    logger_handler.info(f"Retriving {url} -> {dest_filename}")
+    logger_handler.info(f"Retrieving {url} -> {dest_filename}")
     request_handler = requests.get(url, stream=True)
     file_size = int(request_handler.headers['content-length'])
     chunk_size = 1024
@@ -27,7 +27,7 @@ def download_file(dest_filename: str, url: str):
                           unit='KiB'):
             if chunk:
                 output_file.write(chunk)
-    logger_handler.info(f"Retriving {url} -> {dest_filename} FIN")
+    logger_handler.info(f"Retrieving {url} -> {dest_filename} FIN")
 
 
 def download_stream(writer: BinaryIO, url: str):
@@ -37,7 +37,7 @@ def download_stream(writer: BinaryIO, url: str):
     This code uses codes in https://www.simplifiedpython.net/python-download-file/
     """
     global logger_handler
-    logger_handler.info(f"Retriving {url}")
+    logger_handler.info(f"Retrieving {url}")
     request_handler = requests.get(url, stream=True)
     file_size = int(request_handler.headers['content-length'])
     chunk_size = 1024
@@ -46,7 +46,7 @@ def download_stream(writer: BinaryIO, url: str):
                       unit='KiB'):
         if chunk:
             writer.write(chunk)
-    logger_handler.info(f"Retriving {url} FIN")
+    logger_handler.info(f"Retrieving {url} FIN")
 
 
 def get_chr1_chr2_fasta():
@@ -105,7 +105,7 @@ def get_herv_tsv():
 
 
 def main():
-    os.chdir(__file__)
+    os.chdir(os.path.dirname(__file__))
     get_chr1_chr2_fasta()
     get_e_coli_fasta()
     get_herv_seq()

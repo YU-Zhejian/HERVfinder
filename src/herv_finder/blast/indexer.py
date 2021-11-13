@@ -29,7 +29,7 @@ index_item -> [chromosome_name, strand, offset]
 strand is True for default and False for reversed.
 """
 
-DEFAULT_INDEX_LEN = 4
+DEFAULT_INDEX_LEN = 11
 """Index length of nucleotides"""
 
 DEFAULT_CHUNK_LEN = 2000000
@@ -95,12 +95,10 @@ class _IndexWorkerProcess(multiprocessing.Process):
                 bytes_window = in_memory_fasta.get_reversed_complementary(bytes_window)
             if _is_low_complexity(bytes_window):
                 continue
-            # if not bytes_window in self.tmp_dict:
-            #     self.tmp_dict[bytes_window] = set()
             self.tmp_dict[bytes_window].add(
                 (self.chromosome_name, self.strand, self.start_pos + bytes_window_start)
             )
-        self.tmp_dir.put(dict(self.tmp_dict))
+        self.tmp_dir.put(dict(self.tmp_dict),block=False)
 
     def __repr__(self):
         try:
@@ -127,7 +125,7 @@ class _MergeWorkerProcess(multiprocessing.Process):
 
     def run(self):
         time.sleep(1)
-        self.logger_handler.info("Started")
+        self.logger_handler.debug("Started")
         while not self.is_terminated:
             try:
                 get_item = self.input_queue.get(block=False, timeout=0.1)
@@ -135,12 +133,12 @@ class _MergeWorkerProcess(multiprocessing.Process):
                 continue
             except TimeoutError:
                 continue
-            self.logger_handler.info("Got finished process! Start merging...")
+            self.logger_handler.debug("Got finished process! Start merging...")
             self.merged_dict = _blast_index_merge(get_item, self.merged_dict)
             del get_item
-        self.logger_handler.info("FIN recv, transmitting...")
+        self.logger_handler.debug("FIN recv, transmitting...")
         self.output_list.append(self.merged_dict)
-        self.logger_handler.info("FIN")
+        self.logger_handler.debug("FIN")
 
     def sigterm(self, *args, **kwargs):
         self.is_terminated = True
@@ -184,7 +182,7 @@ class BlastIndex:
 
         sync_manager = multiprocessing.Manager()
         public_index = sync_manager.list()
-        public_queue = queue.Queue(maxsize=-1)
+        public_queue = sync_manager.Queue(maxsize=-1)
         # Do not use multiprocessing.Queue.
         new_worker_merger = _MergeWorkerProcess(public_queue, public_index, pool)
         new_worker_merger.start()
@@ -300,7 +298,7 @@ class BlastIndex:
 
 if __name__ == '__main__':
     bi = BlastIndex()
-    bi.create_index('test/e_coli.fasta')
+    bi.create_index('test/test.fasta')
     # print(bi.show_index())
     bi.valid_index()
     bi.get_stats()
