@@ -2,9 +2,10 @@
 A general-purposed bytes-based memory-access read-only FASTA class with GZip support.
 """
 import gzip
+import itertools
 import logging
 import os.path
-from typing import Optional, List
+from typing import Optional, List, Iterable
 
 _FASTA_COMP_TRANS = bytes.maketrans(b'ATCGatcgNnXx', b'TAGCtagcNnXx')
 """The fasta complementary translator dictionary"""
@@ -101,11 +102,20 @@ class Fasta:
     @property
     def chromosomes(self) -> List[str]:
         return list(self._fasta_content.keys())
+    
+    @property
+    def total_length(self) -> int:
+        return sum([len(v) for v in self._fasta_content.values()])
 
 
 def get_reversed_complementary(fasta_bytes: bytes) -> bytes:
     return fasta_bytes.translate(_FASTA_COMP_TRANS)[::-1]
 
+
+def get_all_kmers(k:int, bases: bytes=b'AGCT') -> Iterable[bytes]:
+    all_possible_list = list(itertools.repeat(bases, k))
+    for kmer in itertools.product(*all_possible_list):
+        yield bytes(kmer)
 
 if __name__ == "__main__":
     import doctest

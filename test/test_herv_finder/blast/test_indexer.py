@@ -5,8 +5,9 @@ import random
 import tempfile
 from collections import defaultdict
 
-from herv_finder.blast.indexer import _IndexWorkerProcess, blast_index_type, _is_low_complexity, \
+from herv_finder.blast.indexer import _IndexWorkerProcess, _is_low_complexity, \
     _blast_index_merge
+from herv_finder.blast import blast_index_type
 
 test_std_dict1 = {
     b"AAA": {("1", True, 3), ("1", True, 4)},
@@ -90,18 +91,10 @@ index_len = 4
 
 def test_same_worker_produces_same_outcome():
     tmp_dir = tempfile.mkdtemp()
-    p1 = _IndexWorkerProcess(chromosome_name='tiny',
-                             strand=True,
-                             fasta_bytes=full_length_fasta_bytes,
-                             index_len=index_len,
-                             start_pos=0,
-                             tmp_dir=tmp_dir)
-    p2 = _IndexWorkerProcess(chromosome_name='tiny',
-                             strand=True,
-                             fasta_bytes=full_length_fasta_bytes,
-                             index_len=index_len,
-                             start_pos=0,
-                             tmp_dir=tmp_dir)
+    p1 = _IndexWorkerProcess(chromosome_name='tiny', fasta_bytes=full_length_fasta_bytes, index_len=index_len,
+                             start_pos=0, output_queue=tmp_dir)
+    p2 = _IndexWorkerProcess(chromosome_name='tiny', fasta_bytes=full_length_fasta_bytes, index_len=index_len,
+                             start_pos=0, output_queue=tmp_dir)
     p1.start()
     p2.start()
     p1.join()

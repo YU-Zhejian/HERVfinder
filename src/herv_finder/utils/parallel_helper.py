@@ -131,18 +131,12 @@ class MultiProcessingJobQueue(threading.Thread):
         pbar.close()
         self._is_terminated = True
 
-    def __len__(self):
-        return len(self.pending_job_queue)
-
     def stop(self):
         self._is_terminated = True
 
-    def add(self, mp_instance: multiprocessing.Process):
+    def append(self, mp_instance: multiprocessing.Process):
         self.pending_job_queue.append(mp_instance)
         self._max_queue_len += 1
-
-    def append(self, *args, **kwargs):
-        self.add(*args, **kwargs)
 
     def close(self):
         self.join()
