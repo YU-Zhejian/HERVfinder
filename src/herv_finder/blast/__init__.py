@@ -21,10 +21,13 @@ The type of blast index. Will be a Dictionary with:
 index_item -> blast_index_data_type
 """
 
+blast__indices_type = Dict[bytes, blast_index_type]
+"""
+Indexed using leading 2 bases to save memory.
+"""
+
 DEFAULT_INDEX_LEN = 11
 """Index length of nucleotides"""
 
 DEFAULT_CHUNK_LEN = 2000000
-
 """Default chunk length"""
-
