@@ -1,5 +1,4 @@
 """A general-purposed multi-processed BLAST index creator"""
-import copy
 import gc
 import glob
 import logging
@@ -7,10 +6,10 @@ import multiprocessing
 import os
 import pickle
 import queue
-import signal
 import tempfile
 import threading
 import time
+import uuid
 from collections import defaultdict
 from typing import Optional, List
 
@@ -25,12 +24,13 @@ logging.basicConfig(level=logging.INFO)
 logger_handler = logging.getLogger()
 
 
-def _blast_index_merge(d1: blast_index_type, d2: blast_index_type) -> blast_index_type:
-    dd1 = defaultdict(lambda: [])
-    dd1.update(d1)
+def _blast_index_merge(d1: blast_index_type, d2: blast_index_type):
+    """Merge d2 to d1"""
     for k, v in d2.items():
-        dd1[k].extend(v)
-    return copy.deepcopy(dict(dd1))
+        if k in d1:
+            d1[k].extend(v)
+        else:
+            d1[k] = v
 
 
 def _is_low_complexity(fasta_bytes: bytes) -> bool:
@@ -98,25 +98,25 @@ class _IndexWorkerProcess(multiprocessing.Process):
             return "Worker under construction"
 
 
-class _MergeWorkerProcess(multiprocessing.Process):
+class _ReSplitterWorkerProcess(multiprocessing.Process):
     """Merge the chunk-level indices and split it by two-mers."""
 
     def __init__(self,
                  input_queue: multiprocessing.Queue,
-                 output_queue: multiprocessing.Queue,
-                 per_chunk_index_finish_flag: threading.Event
+                 per_chunk_index_finish_flag: threading.Event,
+                 tmp_dir: str
                  ):
         super().__init__()
-        self.logger_handler = logging.getLogger("Merger")
+        self.logger_handler = logging.getLogger("ReSplitter")
         self.input_queue = input_queue
-        self.output_queue = output_queue
         self.per_chunk_index_finish_flag = per_chunk_index_finish_flag
+        self.tmp_dir = tmp_dir
 
     def run(self):
         time.sleep(1)
         self.logger_handler.debug("Started")
-        total_items_get = 0
-        tmp_dir = tempfile.mkdtemp()
+        total_items_get = uuid.uuid4()
+
         while not self.per_chunk_index_finish_flag.is_set() or not self.input_queue.empty():
             try:
                 get_item = self.input_queue.get(block=False, timeout=0.1)
@@ -124,46 +124,64 @@ class _MergeWorkerProcess(multiprocessing.Process):
                 continue
             except TimeoutError:
                 continue
-            self.logger_handler.debug("Got finished process! Start merging...")
-            total_items_get += 1
+            self.logger_handler.debug("Got finished process! Start resplitting...")
             for two_mer in in_memory_fasta.get_all_kmers(2, bases=b'AGCTNX'):
-                two_mer_str = str(two_mer,encoding='UTF-8')
+                two_mer_str = str(two_mer, encoding='UTF-8')
                 index_started_by_two_mer = {}
                 for k, v in get_item.items():
                     if k.startswith(two_mer):
                         index_started_by_two_mer[k] = v
                 if len(index_started_by_two_mer) > 0:
                     output_filename = f"{two_mer_str}-{total_items_get}.pkl"
-                    pickle.dump(index_started_by_two_mer, open(os.path.join(tmp_dir,output_filename), "wb"))
+                    pickle.dump(index_started_by_two_mer, open(os.path.join(self.tmp_dir, output_filename), "wb"))
                     del index_started_by_two_mer
             del get_item
             gc.collect()
+            total_items_get = uuid.uuid4()
+
+
+class _MergeWorkerProcess(multiprocessing.Process):
+    """Merge the chunk-level indices and split it by two-mers."""
+
+    def __init__(self,
+                 output_queue: multiprocessing.Queue,
+                 tmp_dir: str
+                 ):
+        super().__init__()
+        self.logger_handler = logging.getLogger("Merger")
+        self.output_queue = output_queue
+        self.tmp_dir = tmp_dir
+
+    def run(self):
         self.logger_handler.info("Re-splitting the index to 2-mers...")
-        for two_mer in tqdm.tqdm(desc="Merging...",
-                                 iterable=list(in_memory_fasta.get_all_kmers(2, bases=b'AGCTNX'))
-                                 ):
-            two_mer_str = str(two_mer, encoding='UTF-8')
-            index_started_by_two_mer = {}
-            for filename in glob.glob(os.path.join(tmp_dir,f"{two_mer_str}-*.pkl")):
-                self.logger_handler.debug(f"Joining chunk-level index from {filename}")
-                get_item = pickle.load(open(filename,"rb"))
-                index_started_by_two_mer=_blast_index_merge(index_started_by_two_mer,get_item)
-                del get_item
-            if len(index_started_by_two_mer) > 0:
-                self.output_queue.put(
-                    (two_mer, index_started_by_two_mer)
-                )
+        with tqdm.tqdm(desc="Merging...",
+                       total=len(list(glob.glob(os.path.join(self.tmp_dir, f"*-*.pkl"))))) as pbar:
+            for two_mer in in_memory_fasta.get_all_kmers(2, bases=b'AGCTNX'):
+                two_mer_str = str(two_mer, encoding='UTF-8')
+                index_started_by_two_mer = {}
+                for filename in glob.glob(os.path.join(self.tmp_dir, f"{two_mer_str}-*.pkl")):
+                    self.logger_handler.debug(f"Joining chunk-level index from {filename}")
+                    get_item = pickle.load(open(filename, "rb"))
+                    _blast_index_merge(index_started_by_two_mer, get_item)
+                    os.remove(filename)
+                    pbar.update(1)
+                    del get_item
+                if len(index_started_by_two_mer) > 0:
+                    self.output_queue.put(
+                        (two_mer, index_started_by_two_mer)
+                    )
                 # del index_started_by_two_mer
-        self.output_queue.close()
         self.logger_handler.debug("FIN")
 
 
 class BlastIndex:
     """The blast index creator and utilities"""
+
     def __init__(self,
+                 basename: str,
                  pool_len: Optional[int] = multiprocessing.cpu_count(),
                  index_len: Optional[int] = DEFAULT_INDEX_LEN,
-                 chunk_len: Optional[int] = DEFAULT_CHUNK_LEN
+                 chunk_len: Optional[int] = DEFAULT_CHUNK_LEN,
                  ):
         logger_handler.info("BlastIndex initializing...")
         self._indices = {}
@@ -185,13 +203,16 @@ class BlastIndex:
         self.total_index_count = 0
         """Number of entries inside the indicies. Can be duplicated."""
 
+        self.basename = basename
+        """The basename of the index"""
+
     def attach_fasta(self, fasta_filename: str):
         self._fasta_obj = in_memory_fasta.Fasta(fasta_filename)
 
     def detach_fasta(self):
         if self._fasta_obj is not None:
             del self._fasta_obj
-            self._fasta_obj=None
+            self._fasta_obj = None
 
     def create_index_singlethread(self):
         tmp_dict = defaultdict(lambda: [])
@@ -218,15 +239,12 @@ class BlastIndex:
                             (chromosome_name, False, bytes_window_start)
                         )
                     pbar.update(1)
-        self._indices = [dict(tmp_dict)] # FIXME
+        self._indices = [dict(tmp_dict)]  # FIXME
         self._update_total_index_count()
 
-    def create_index(self, dest_basename: str):
+    def create_index(self):
         """
         Wrapper function to (re)-create the index.
-
-        :param fasta_filename: Filename of input FASTA
-        :param index_len: The length (k of the k-mer) of the index.
         """
 
         self._indices = {}
@@ -244,12 +262,16 @@ class BlastIndex:
         per_chunk_index_finish_flag = sync_manager.Event()
         per_chunk_index_finish_flag.clear()
         # Do not use multiprocessing.Queue.
-        worker_merger = _MergeWorkerProcess(
-            input_queue=per_chunk_index_queue,
-            output_queue=per_prefix_index_queue,
-            per_chunk_index_finish_flag=per_chunk_index_finish_flag
-        )
-        worker_merger.start()
+        tmp_dir = tempfile.mkdtemp()
+        resplitter_pool = parallel_helper.MultiProcessingJobQueue(pool_size=self.pool_len)
+        for i in range(self.pool_len):
+            worker_resplitter = _ReSplitterWorkerProcess(
+                input_queue=per_chunk_index_queue,
+                per_chunk_index_finish_flag=per_chunk_index_finish_flag,
+                tmp_dir=tmp_dir
+            )
+            resplitter_pool.append(worker_resplitter)
+        resplitter_pool.start()
         for chromosome_name in self._fasta_obj.chromosomes:
             # Submit index creation job for a particular chromosome
             fasta_bytes = self._fasta_obj.get(chromosome_name)
@@ -275,7 +297,11 @@ class BlastIndex:
         pool.start()
         pool.join()
         logger_handler.info(f"Chunk-level indexing had finished, re-merging in prefix-level...")
-        per_chunk_index_finish_flag.set() # Notify the merger that all chunks have finished
+        per_chunk_index_finish_flag.set()  # Notify the merger that all chunks have finished
+        resplitter_pool.join()
+        gc.collect()
+        worker_merger = _MergeWorkerProcess(output_queue=per_prefix_index_queue, tmp_dir=tmp_dir)
+        worker_merger.start()
         while worker_merger.exitcode is None:
             try:
                 get_item = per_prefix_index_queue.get(block=False, timeout=0.1)
@@ -284,13 +310,13 @@ class BlastIndex:
             except TimeoutError:
                 continue
             kmer_str = str(get_item[0], encoding='UTF-8')
-            output_filename = f"{dest_basename}_{kmer_str}.pkl.xz"
+            output_filename = f"{self.basename}_{kmer_str}.pkl.xz"
             logger_handler.debug(f"Writing index to {output_filename}...")
             compressed_pickle.dump(get_item[1], output_filename)
             del get_item
-        print(worker_merger.exitcode)
         worker_merger.join()
         worker_merger.close()
+        os.rmdir(tmp_dir)
         gc.collect()
         logger_handler.info(f"Index FIN")
 
@@ -303,21 +329,30 @@ class BlastIndex:
             rets += '\n'
         return rets
 
-    def read_index(self, from_basename: str, two_mers:List[bytes] = in_memory_fasta.get_all_kmers(2)):
+    def read_index(self, two_mers: List[bytes] = in_memory_fasta.get_all_kmers(2)):
         """Read index from a file."""
-        logger_handler.info(f"Reading index from {from_basename}...")
-        self._indices ={}
+        logger_handler.info(f"Reading index from {self.basename}...")
+        self._indices = {}
         for two_mer in two_mers:
             kmer_str = str(two_mer, encoding='UTF-8')
-            load_filename = f"{from_basename}_{kmer_str}.pkl.xz"
+            load_filename = f"{self.basename}_{kmer_str}.pkl.xz"
             if os.path.exists(load_filename):
                 logger_handler.info(f"Reading index from {load_filename}...")
                 self._indices[two_mer] = compressed_pickle.load_with_tqdm(load_filename)
         try:
             self.index_len = len(list(list(self._indices.values())[0].keys())[0])
-        except:
+        except (IndexError, AttributeError):
             self.index_len = None
-        logger_handler.info(f"Reading index from {from_basename} FIN")
+        self._update_total_index_count()
+        logger_handler.info(f"Reading index from {self.basename} FIN")
+
+    def drop_index(self, two_mers: List[bytes] = in_memory_fasta.get_all_kmers(2)):
+        for two_mer in two_mers:
+            try:
+                self._indices.pop(two_mer)
+            except KeyError:
+                pass
+        self._update_total_index_count()
 
     def get_stats(self):
         """Print statistics of this index"""
@@ -380,23 +415,32 @@ class BlastIndex:
             for v in index.values():
                 self.total_index_count += len(v)
 
-
-def _test_on_tiny():
-    bi = BlastIndex(index_len=4, chunk_len=20)
-    bi.attach_fasta('test/tiny.fasta')
-    bi.create_index('test/test')
-    bi.read_index('test/test')
-    print(bi.show_index())
+def base_test(bi:BlastIndex):
+    bi.create_index()
+    bi.read_index()
     bi.valid_index()
     bi.detach_fasta()
     bi.get_stats()
-    del bi
-    bj = BlastIndex()
-    bj.read_index('test/test')
-    print(bj.show_index())
-    bj.valid_index()
-    bj.get_stats()
+
+def _test_on_tiny():
+    bi = BlastIndex(basename='test/tiny', index_len=4, chunk_len=20)
+    bi.attach_fasta('test/tiny.fasta')
+    base_test(bi)
+    print(bi.show_index())
+
+
+def _test_on_e_coli():
+    bi = BlastIndex(basename='test/e_coli', index_len=4)
+    bi.attach_fasta('test/e_coli.fasta')
+    base_test(bi)
+
+def _test_on_test():
+    bi = BlastIndex(basename='test/test', pool_len=multiprocessing.cpu_count() // 2)
+    bi.attach_fasta('test/test.fasta')
+    base_test(bi)
 
 
 if __name__ == '__main__':
     _test_on_tiny()
+    _test_on_e_coli()
+    _test_on_test()

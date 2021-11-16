@@ -89,8 +89,7 @@ class MultiProcessingJobQueue(threading.Thread):
     def __init__(self,
                  pool_name: str = "Unnamed pool",
                  pool_size: int = multiprocessing.cpu_count(),
-                 with_tqdm: bool = False,
-                 return_function:Callable = None):
+                 with_tqdm: bool = False):
         super().__init__()
         self.pool_size = pool_size
         self.pending_job_queue = []
@@ -111,6 +110,7 @@ class MultiProcessingJobQueue(threading.Thread):
                     process.close()
                     gc.collect()
                     self.running_job_queue.remove(process)
+                    del process
                     pbar.update(1)
 
         if self.with_tqdm:
@@ -140,3 +140,8 @@ class MultiProcessingJobQueue(threading.Thread):
 
     def close(self):
         self.join()
+
+    def killall(self):
+        for process in self.running_job_queue:
+            process.kill()
+            del process
