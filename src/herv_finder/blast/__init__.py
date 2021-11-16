@@ -1,12 +1,12 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Iterable
 
 blast_index_location_type = Tuple[str, bool, int]
 """
-The basic index segment.
+Type of a location. Will cost 64 bytes.
 
 [chromosome_name, strand, offset]
 
-strand is True for default and False for reversed.
+strand is True for default and False for reverse complementary strand.
 """
 
 blast_index_locations_type = List[blast_index_location_type]
@@ -23,19 +23,20 @@ index_item -> blast_index_locations_type
 
 blast_indices_type = Dict[bytes, blast_simple_index_type]
 """
-Indexed using leading some bases to save memory.
+Indexed using prefix to save memory.
 """
 
+blast_anchor_type = Tuple[blast_index_location_type, blast_index_location_type]
+
+blast_anchors_type = Iterable[blast_anchor_type]
+
+
 DEFAULT_WORD_LEN = 11
-"""Index length of nucleotides"""
-
 DEFAULT_CHUNK_LEN = 2000000
-"""Default chunk length"""
+DEFAULT_PREFIX_LEN = 3
 
-DEFAULT_LEADING_N_BASES = 1
-""""""
 
-def blast_index_merge(d1: blast_simple_index_type, d2: blast_simple_index_type):
+def merge_blast_simple_index(d1: blast_simple_index_type, d2: blast_simple_index_type):
     """Merge d2 to d1"""
     for k, v in d2.items():
         if k in d1:
@@ -54,5 +55,11 @@ def is_low_complexity(fasta_bytes: bytes) -> bool:
     _ = fasta_bytes
     return False
 
+def sort_raw_anchors(raw_anchors:blast_anchors_type) -> blast_anchors_type:
+    # TODO
+    raw_anchor_list=list(raw_anchors)
+    pass
 
-
+def merge_adjacent_anchors(sorted_anchors:blast_anchors_type) -> blast_anchors_type:
+    # TODO
+    pass

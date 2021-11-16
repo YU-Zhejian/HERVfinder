@@ -3,7 +3,7 @@ import gc
 import multiprocessing
 import threading
 import time
-from typing import Callable, Union
+from typing import Union
 
 import tqdm
 
