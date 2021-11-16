@@ -16,6 +16,7 @@ import io
 import lzma
 import os
 import pickle
+import shutil
 from typing import Any
 
 import tqdm
@@ -29,8 +30,10 @@ def dump(obj: Any, output_path: str) -> None:
     :param output_path: Output path of pickled object.
     :return: None
     """
-    with lzma.open(output_path, 'wb', preset=lzma.PRESET_EXTREME) as writer:
+    unfinished_output_path = output_path + ".unfinished"
+    with lzma.open(unfinished_output_path, 'wb', preset=lzma.PRESET_EXTREME) as writer:
         pickle.dump(obj, writer)
+    shutil.move(unfinished_output_path, output_path)
 
 
 def load(input_path: str) -> Any:

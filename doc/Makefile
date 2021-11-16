@@ -1,4 +1,4 @@
-DOC_BASENAME :=  "Proposal"
+DOC_BASENAME :=  "HERVfinder"
 DOC :=  "$(DOC_BASENAME).tex"
 LATEX_OPTS := -shell-escape -interaction=nonstopmode
 

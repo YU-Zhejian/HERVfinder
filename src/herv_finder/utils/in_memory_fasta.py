@@ -7,7 +7,7 @@ import logging
 import os.path
 from typing import Optional, List, Iterable
 
-_FASTA_COMP_TRANS = bytes.maketrans(b'ATCGatcgNnXx', b'TAGCtagcNnXx')
+_FASTA_COMP_TRANS = bytes.maketrans(b'ATCGatcgNn', b'TAGCtagcNn')
 """The fasta complementary translator dictionary"""
 
 _FASTA_REMOVE_LOWCASE_TRANS = bytes.maketrans(b'atcgnx', b'ATCGNX')
@@ -44,11 +44,11 @@ class Fasta:
 
     def __init__(self, filename: str):
         logger_handler.info(f"Creating FASTA from {filename}...")
-        self._filename = os.path.abspath(os.path.expanduser(filename))
+        self.filename = os.path.abspath(os.path.expanduser(filename))
         """The absolute path of Fasta."""
 
-        if not os.path.isfile(self._filename):
-            raise FileNotFoundError(f"${self._filename} do not exist!")
+        if not os.path.isfile(self.filename):
+            raise FileNotFoundError(f"${self.filename} do not exist!")
 
         self._fasta_content = {}
         """
@@ -60,11 +60,11 @@ class Fasta:
 
     def _load(self):
         """Read the fasta file and load it into memory."""
-        if self._filename.endswith(".gz") or self._filename.endswith(".GZ"):
+        if self.filename.endswith(".gz") or self.filename.endswith(".GZ"):
             reader_func = gzip.open
         else:
             reader_func = open
-        with reader_func(self._filename, "rb") as reader:
+        with reader_func(self.filename, "rb") as reader:
             chromosome_name = ""
             seq = bytearray()
             while True:
@@ -88,7 +88,10 @@ class Fasta:
 
     def get(self, chromosome_name: str, start: Optional[int] = 0, end: Optional[int] = -1,
             strand: bool = True) -> bytes:
-        """Get a 0-based [) sequence for random access. If end = -1, will put all sequences till end."""
+        """
+        Get a 0-based [) sequence for random access.
+        If end = -1, will put all sequences till end.
+        """
 
         if chromosome_name not in self._fasta_content:
             raise KeyError(f"Illegal chromosome name {chromosome_name}")
