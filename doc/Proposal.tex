@@ -1,0 +1,56 @@
+\documentclass[9pt,final,journal,twocolumn,a4paper]{IEEEtran}
+
+\title{Project Proposal of HERVfinder -- A BLAST-Based Multi-Thread HERV Finder}
+\author{Group 12}
+% \IEEEspecialpapernotice{Proposal}
+
+% \IEEEpubid{Proposal}
+
+\newcommand{\warn}{\textbf{WARNING:}\space}
+\newcommand{\info}{\textbf{INFO:}\space}
+\usepackage{fancyvrb}
+\usepackage{minted}
+\fvset{numbers=left,fontsize=\fontsize{8}{10}\selectfont,numbersep=6pt}
+
+\usepackage{nth}
+\usepackage{hologo}
+\usepackage{float}
+\usepackage{hyperref}
+\begin{document}
+\sloppy{}\flushbottom\maketitle
+\section{Introduction}
+
+\IEEEPARstart{H}{uman} Endogenous Retroviruses (HERV) are a family of viruses inside the human genome produced by ancient retroviral infection. It is important to locate them inside the human genome since they are proven to be related to cancer and other diseases.
+
+The problem of finding HERV inside the human genome can be considered as a problem of \textbf{un-gapped sequence alignment} or \textbf{state prediction}. Approach to the first problem may consider Basic Local Alignment Search Tool (BLAST)-like seed-and-extend algorithms or suffix tree with mismatch using Burrows-Wheeler Transform (BWT) with Ferragina-Manzini (FM) Index, with another using machine-learning based approach like Hidden Markov Models (HMM).
+
+So, we proposed to develop \verb|HERVfinder|, which is a bioinformatics software that can identify the HERV sequences inside the human reference genome or other genome assemblies in FASTA format. It will take HERV consensus sequence FASTA downloaded from Dfam and un- or soft-masked assembled human genome FASTA sequence as input, and produce a tabular file containing all HERV loci in BED or GTF format. This application should run on any computer with Python (CPython implementation) 3.7+. Users may also specify selected HERV types, the number of mismatches allowed or the number of threads used.
+
+
+\section{Design of Algorithm}
+
+\subsection{Basic BLAST}
+
+The BLAST-alike algorithm used is a modified version of BLASTN, which is a heuristic seed-and-extend algorithm. Here, we refer to the HERV sequences as needles and the human reference genome as the haystack.
+
+FASTA file of the haystack is loaded into memory and split by chunk with 2, 000, 000 bp. They are parallelly indexed and the chunk-level indices will be pickled and saved. The data structure of indices is a \verb|Dict| with k-mer as key and a list of (chromosome, strand, starting-position) tuples as value. They are further split by the leading 2 bases, making it easy to be load partially to save memory. The indices are re-merged using leading 2 bases and separately saved using \verb|pickle| stdlib with Lempel-Ziv-Markov chain Algorithm version 2 (LZMA2) compression using \verb|lzma| stdlib on-the-fly.
+
+The anchoring part of the algorithm is a single-threaded algorithm, providing an iterator of pairs of (chromosome, strand, starting-position) tuples as matching positions on needle and haystack. They are then parallelly extended using Smith-Waterman-Gotoh-alike gap-aware local-alignment algorithms using dynamic programming. The extension is dropped if the score drops below a threshold, or accepted if the needle is found. The accepted loci are finally collected and transmitted to BED or GTF format and saved to disk.
+
+\subsection{Multi-Thread \& Multi-Process}
+
+Multi-thread or multi-process is the core of the fast speed of BLAST and we never over-state its importance. Compared to single-threaded implementation, the multi-threaded approach is far more challenging by aspects like memory inconsistency, large memory use, inefficient scheduler and much much more. This project allows us to explore multi-threaded algorithm design and is beneficial.
+
+Due to the existence of Global Interpretation Lock (GIL), the Python interpreter can execute only one Python machine code at a time, which makes multi-threading or co-routine useless for computation-intensive tasks. So, for \textbf{computation-intensive tasks}, the program will use multi-process provided by \verb|multiprocessing| stdlib; for \textbf{IO-intensive tasks}, the program will use multi-threading provided by \verb|threading| stdlib. \verb|asyncio| stdlib is hard-to-use and may contaminate the entire program, so not used. We use \verb|multiprocessing.Manager.Queue| to enable communication among processes.
+
+For resource pooling, we identified that \verb|multiprocessing.Pool| and \verb|concurrence.future| have great limitations. They only accept functions as input and have no way to tell how many processes are being executed. So we implemented a thread \& process pool on our own. This pool can accept \verb|multiprocessing.Process| or \verb|threading.Thread| class as input and display a nice progress bar using \verb|tqdm|.
+
+\section{Discussion}
+
+The algorithm BLAST is chosen for this project because its implementation is relatively easy. However, it is not that suitable to search for repetitive sequences. To overcome this problem, a second version using HMM is proposed. The HMM version includes generation of HMM from consensus sequence, apply it on the human reference genome and matrix acceleration using Numpy or Nvidia Cuda.
+
+\section{Question}
+
+We're having no idea whether we should use reference genome with alternative (alt) or patch sequences.
+
+\end{document}
