@@ -2,7 +2,8 @@ import itertools
 import multiprocessing
 from typing import Iterable, Tuple, Optional
 
-from herv_finder.blast import blast_index_location_type, blast_simple_index_type, indexer, blast_anchors_type
+from herv_finder.blast import blast_index_location_type, blast_simple_index_type, indexer, blast_anchors_type, \
+    merge_adjacent_anchors
 
 
 class _ExtendWorkerProcess(multiprocessing.Process):
@@ -50,7 +51,10 @@ def _test_tiny():
     haystack_index.attach_fasta("test/tiny.fasta")
     haystack_index.create_index()
     searcher = BlastIndexSearcher(needle_index=needle_index,haystack_index=haystack_index)
-    print(list(searcher.anchor()))
+    for anchor in searcher.generate_raw_anchors():
+        print(anchor[0][2],anchor[1][2])
+    for merged_anchor in merge_adjacent_anchors(searcher.generate_raw_anchors()):
+        print(merged_anchor)
 
 
 
