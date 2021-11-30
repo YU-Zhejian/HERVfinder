@@ -63,7 +63,7 @@ class _IndexWorkerProcess(multiprocessing.Process):
             #     )
         self.logger_handler.debug(f"Worker PID: {self.pid} start transmitting data")
         total_items_get = uuid.uuid4()
-        for two_mer in in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN'):
+        for two_mer in in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT'):
             two_mer_str = str(two_mer, encoding='UTF-8')
             index_started_by_two_mer = {}
             for k, v in self.tmp_dict.items():
@@ -155,8 +155,9 @@ class _BaseBlastIndex:
 
     def _update_total_index_count(self):
         self.total_index_count = 0
-        for index in tqdm.tqdm(desc="Updating total index count",
-                               iterable=self._indices.values()):
+        # for index in tqdm.tqdm(desc="Updating total index count",
+        #                        iterable=self._indices.values()):
+        for index in self._indices.values():
             for v in index.values():
                 self.total_index_count += len(v)
 
@@ -222,7 +223,7 @@ class InMemorySimpleBlastIndex(_BaseBlastIndex):
                     # pbar.update(1)
         self.logger_handler.info(f"Splitting in prefix-level...")
         for two_mer in tqdm.tqdm(desc="Splitting...",
-                                 iterable=list(in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN'))):
+                                 iterable=list(in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT'))):
             index_started_by_two_mer = {}
             for k, v in tmp_dict.items():
                 if k.startswith(two_mer):
@@ -290,7 +291,7 @@ class BlastIndex(_BaseBlastIndex):
         self.logger_handler.info(f"Chunk-level indexing had finished, Re-merging in prefix-level...")
         with tqdm.tqdm(desc="Merging...",
                        total=len(list(glob.glob(os.path.join(tmp_dir, f"*-*.pkl"))))) as pbar:
-            for two_mer in in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN'):
+            for two_mer in in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT'):
                 two_mer_str = str(two_mer, encoding='UTF-8')
                 index_started_by_two_mer = {}
                 for filename in glob.glob(os.path.join(tmp_dir, f"{two_mer_str}-*.pkl")):
@@ -311,25 +312,25 @@ class BlastIndex(_BaseBlastIndex):
     def read_index(self, two_mers: List[bytes] = None):
         """Read index from a file."""
         if two_mers is None:
-            two_mers = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN')
-        self.logger_handler.info(f"Reading index from {self.basename}...")
+            two_mers = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT')
+        self.logger_handler.debug(f"Reading index from {self.basename}...")
         self._indices = {}
         for two_mer in two_mers:
             kmer_str = str(two_mer, encoding='UTF-8')
             load_filename = f"{self.basename}_{kmer_str}.pkl.xz"
             # print(f"{self.basename}_{kmer_str}.pkl.xz")
             if os.path.exists(load_filename):
-                self.logger_handler.info(f"Reading index from {load_filename}...")
-                self._indices[two_mer] = compressed_pickle.load_with_tqdm(load_filename)
+                self.logger_handler.debug(f"Reading index from {load_filename}...")
+                self._indices[two_mer] = compressed_pickle.load(load_filename)
         try:
             self.word_len = len(list(list(self._indices.values())[0].keys())[0])
         except (IndexError, AttributeError):
             self.word_len = None
         self._update_total_index_count()
-        self.logger_handler.info(f"Reading index from {self.basename} FIN")
+        self.logger_handler.debug(f"Reading index from {self.basename} FIN")
 
     def drop_index(self,
-                   two_mers: List[bytes] = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN')):
+                   two_mers: List[bytes] = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT')):
         for two_mer in two_mers:
             try:
                 self._indices.pop(two_mer)
@@ -341,7 +342,7 @@ class BlastIndex(_BaseBlastIndex):
     def available_prefixes(self) -> List[bytes]:
         """All available prefixes"""
         retl=[]
-        two_mers = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCTN')
+        two_mers = in_memory_fasta.get_all_kmers(DEFAULT_PREFIX_LEN, bases=b'AGCT')
         for two_mer in two_mers:
             kmer_str =str(two_mer, encoding='UTF-8')
             if os.path.exists(f"{self.basename}_{kmer_str}.pkl.xz"):
@@ -385,5 +386,5 @@ if __name__ == '__main__':
     for fn in glob.glob('test/*.pkl.xz'):
         os.remove(fn)
     _test_on_tiny()
-    # _test_on_e_coli()
-    # _test_on_test()
+    _test_on_e_coli()
+    _test_on_test()

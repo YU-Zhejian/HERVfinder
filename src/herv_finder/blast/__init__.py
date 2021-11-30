@@ -55,8 +55,7 @@ def is_low_complexity(fasta_bytes: bytes) -> bool:
     TODO
     """
     # return b'N' in fasta_bytes or b'a' in fasta_bytes
-    _ = fasta_bytes
-    return False
+    return b'N' in fasta_bytes
 
 def merge_adjacent_anchors(raw_anchors:blast_anchors_type) -> blast_merged_anchors_type:
     """
