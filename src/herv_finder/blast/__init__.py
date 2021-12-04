@@ -36,16 +36,6 @@ blast_anchors_type = Iterable[blast_anchor_type]
 [[[chromosome_name, strand, offset],[chromosome_name, strand, offset]]]
 """
 
-blast_merged_anchor_type = Tuple[blast_index_location_type, blast_index_location_type, int]
-"""
-[[chromosome_name, strand, offset],[chromosome_name, strand, offset],len]
-"""
-
-blast_merged_anchors_type = Iterable[blast_merged_anchor_type]
-"""
-[[[chromosome_name, strand, offset],[chromosome_name, strand, offset],len]]
-"""
-
 blast_extended_anchor_type = Tuple[Tuple[str, bool, int, int], Tuple[str, bool, int, int], int]
 """
 [[chromosome_name, strand, offset,len],[chromosome_name, strand, offset,len],score]

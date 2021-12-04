@@ -3,8 +3,6 @@ import itertools
 import logging
 import multiprocessing
 import queue
-import time
-from collections import defaultdict
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -12,48 +10,11 @@ import numpy as np
 import tqdm
 
 from herv_finder.blast import indexer, blast_anchors_type, \
-    blast_merged_anchors_type, blast_merged_anchor_type, \
-    blast_extended_anchor_type, blast_extended_anchors_type
-from herv_finder.utils import in_memory_fasta
+    blast_extended_anchor_type, blast_extended_anchors_type, blast_anchor_type
+from herv_finder.utils import in_memory_fasta, parallel_helper
 
-EXTENDER_BATCH_SIZE = 10000
+EXTENDER_BATCH_SIZE = 1000
 """After generation of anchors of this number, submit them to the queue."""
-
-
-def merge_adjacent_anchors(raw_anchors: blast_anchors_type, word_len: int) -> blast_merged_anchors_type:
-    """
-    Merge adjacent anchors.
-    """
-    anchor_dict = defaultdict(list)
-    """Dict[needle_chromosome, needle_strand, haystack_chromosome, haystack_strand], 
-    List[needle_start, haystack_start]]"""
-    for anchor in raw_anchors:
-        anchor_dict[(anchor[0][0], anchor[0][1], anchor[1][0], anchor[1][1])].append((anchor[0][2], anchor[1][2]))
-    for k, v in anchor_dict.items():
-        while len(v) > 0:
-            tmp_merge_base = v.pop()
-            merge_base_f = (tmp_merge_base[0], tmp_merge_base[1])
-            merge_base_b = (tmp_merge_base[0], tmp_merge_base[1])
-            extend_length = word_len
-            # Forward extend
-            while True:
-                tmp_extend_anchor = (merge_base_f[0] + 1, merge_base_f[1] + 1)
-                if tmp_extend_anchor in v:
-                    v.remove(tmp_extend_anchor)
-                    merge_base_f = (merge_base_f[0] + 1, merge_base_f[1] + 1)
-                    extend_length += 1
-                else:
-                    break
-            # Reverse extend
-            while True:
-                tmp_extend_anchor = (merge_base_b[0] - 1, merge_base_b[1] - 1)
-                if tmp_extend_anchor in v:
-                    v.remove(tmp_extend_anchor)
-                    merge_base_b = (merge_base_b[0] - 1, merge_base_b[1] - 1)
-                    extend_length += 1
-                else:
-                    break
-            yield (k[0], k[1], merge_base_b[0]), (k[2], k[3], merge_base_b[1]), extend_length
 
 
 def blast_score(b1: bytes, b2: bytes) -> int:
@@ -77,7 +38,7 @@ def blast_score(b1: bytes, b2: bytes) -> int:
     return scores[l_b1 - 1][l_b2 - 1]
 
 
-def visualize_anchors(anchors: blast_merged_anchors_type,
+def visualize_anchors(anchors: blast_anchors_type,
                       needle_chromosome_name: str,
                       haystack_chromosome_name: str,
                       needle_strand: bool = True, haystack_strand: bool = True
@@ -103,9 +64,10 @@ def visualize_anchors(anchors: blast_merged_anchors_type,
 
 
 class _ExtendWorkerProcess(multiprocessing.Process):
-    def __init__(self, anchors_to_extend: blast_merged_anchors_type,
+    def __init__(self, anchors_to_extend: blast_anchors_type,
                  needle_fasta_filename: str,
                  haystack_fasta_name: str,
+                 word_len:int,
                  output_queue: multiprocessing.Queue
                  ):
         super().__init__()
@@ -115,13 +77,14 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         self.output_queue = output_queue
         self.logger_handler = logging.getLogger("Worker")
         self.logger_handler.debug(self.__repr__())
+        self.word_len=word_len
 
-    def extend(self, merged_anchor: blast_merged_anchor_type) -> blast_extended_anchor_type:
-        # print(merged_anchor)
-        needle_len = merged_anchor[2]
-        needle_chromosome, needle_strand, needle_start = merged_anchor[0]
+    def extend(self, raw_anchor: blast_anchor_type) -> blast_extended_anchor_type:
+        # print(raw_anchor)
+        needle_len = self.word_len
+        needle_chromosome, needle_strand, needle_start = raw_anchor[0]
         needle_end = needle_start + needle_len
-        haystack_chromosome, haystack_strand, haystack_start = merged_anchor[1]
+        haystack_chromosome, haystack_strand, haystack_start = raw_anchor[1]
         haystack_end = haystack_start + needle_len
         max_score = needle_len * 2
         max_coordinate = (needle_start, needle_end, haystack_start, haystack_end)
@@ -153,7 +116,7 @@ class _ExtendWorkerProcess(multiprocessing.Process):
     def run(self):
         for alignment in self.anchors_to_extend:
             self.output_queue.put(self.extend(alignment))
-        self.logger_handler.info("FIN")
+        self.logger_handler.debug("FIN")
 
     def __repr__(self):
         try:
@@ -194,30 +157,57 @@ class BlastIndexSearcher:
                 ):
                     yield needle_location, haystack_location
 
-    def extend(self, merged_anchors: blast_merged_anchors_type) -> blast_extended_anchors_type:
+    def extend(self, raw_anchors: blast_anchors_type) -> blast_extended_anchors_type:
         """"""
         this_manager = multiprocessing.Manager()
         output_queue = this_manager.Queue()
         this_batch=[]
-        for merged_anchor in merged_anchors:
+        process_pool = parallel_helper.ParallelJobQueue(
+            pool_name="Extending",
+            pool_size=self._pool_len,
+            with_tqdm=True
+        )
+        worker_args={
+            "needle_fasta_filename" : self.needle_index.fasta_filename,
+                                    "haystack_fasta_name" : self.haystack_index.fasta_filename,
+                                                          "word_len" : self.needle_index.word_len,
+                                                                     "output_queue" : output_queue
+        }
+        for raw_anchor in raw_anchors:
             if len(this_batch)<self.extend_batch_size:
-                this_batch
+                this_batch.append(raw_anchor)
             else:
+                ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch, **worker_args)
+                process_pool.append(ewp)
                 this_batch=[]
         if len(this_batch) > 0:
-            this_batch
+            ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch,**worker_args)
+            process_pool.append(ewp)
+        process_pool.start()
+        while not process_pool.all_finished:
+            try:
+                # print(ewp.exitcode, ewp.is_alive())
+                yield output_queue.get(timeout=0.1)
+                # print(get_item)
+            except (TimeoutError, queue.Empty):
+                pass
+        process_pool.join()
 
-    def extend_single_thread(self, merged_anchors: blast_merged_anchors_type) -> blast_extended_anchors_type:
-        merged_anchors = list(merged_anchors)
+    def extend_single_thread(self, raw_anchors: blast_anchors_type) -> blast_extended_anchors_type:
+        raw_anchors = list(raw_anchors)
         this_manager = multiprocessing.Manager()
         output_queue = this_manager.Queue()
-        ewp = _ExtendWorkerProcess(merged_anchors, self.needle_index.fasta_filename,
-                                   self.haystack_index.fasta_filename, output_queue)
+        ewp = _ExtendWorkerProcess(
+            anchors_to_extend=raw_anchors,
+            needle_fasta_filename=self.needle_index.fasta_filename,
+            haystack_fasta_name=self.haystack_index.fasta_filename,
+            word_len=self.needle_index.word_len,
+            output_queue=output_queue)
         ewp.start()
-        with tqdm.tqdm(total=len(merged_anchors)) as pbar:
+        with tqdm.tqdm(total=len(raw_anchors)) as pbar:
             while ewp.is_alive():
                 try:
-                    print(ewp.exitcode, ewp.is_alive())
+                    # print(ewp.exitcode, ewp.is_alive())
                     yield output_queue.get(timeout=0.1)
                     pbar.update(1)
                     # print(get_item)
@@ -239,8 +229,6 @@ def _test_tiny():
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
     for anchor in searcher.generate_raw_anchors():
         print(anchor[0][2], anchor[1][2])
-    for merged_anchor in merge_adjacent_anchors(searcher.generate_raw_anchors(), word_len=11):
-        print(merged_anchor)
 
 
 def _test_on_e_coli():
@@ -253,12 +241,9 @@ def _test_on_e_coli():
 
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
     raw_anchors = searcher.generate_raw_anchors()
-    # print(list(raw_anchors))
-    merged_anchors = merge_adjacent_anchors(raw_anchors, word_len=5)
-    # searcher.visualize_anchors(merged_anchors,
-    #                            'needle', 'NC_000913.3 Escherichia coli str. K-12 substr. MG1655, complete genome')
-    for item in searcher.extend_single_thread(itertools.islice(merged_anchors, 100)):
-        print(item)
+    with open("1.log","w") as writer:
+        for item in searcher.extend(raw_anchors):
+            writer.write(str(item[2])+'\n')
 
 
 def _test_on_test():
@@ -271,8 +256,11 @@ def _test_on_test():
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
     # for anchor in searcher.generate_raw_anchors():
     #     print(anchor[0][2],anchor[1][2])
-    visualize_anchors(merge_adjacent_anchors(searcher.generate_raw_anchors(), 11), 'DF0000558.4 LTR5_Hs', 'chr21')
+    raw_anchors = searcher.generate_raw_anchors()
+    with open("1.log", "w") as writer:
+        for item in searcher.extend(raw_anchors):
+            writer.write(str(item[2]) + '\n')
 
 
 if __name__ == "__main__":
-    _test_on_e_coli()
+    _test_on_test()

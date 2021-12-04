@@ -43,7 +43,7 @@ class Fasta:
     """
 
     def __init__(self, filename: str):
-        logger_handler.info(f"Creating FASTA from {filename}...")
+        logger_handler.debug(f"Creating FASTA from {filename}...")
         self.filename = os.path.abspath(os.path.expanduser(filename))
         """The absolute path of Fasta."""
 
@@ -56,7 +56,7 @@ class Fasta:
         """
 
         self._load()
-        logger_handler.info(f"FASTA load complete")
+        logger_handler.debug(f"FASTA load complete")
 
     def _load(self):
         """Read the fasta file and load it into memory."""
