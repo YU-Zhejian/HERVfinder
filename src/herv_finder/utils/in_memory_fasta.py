@@ -110,8 +110,9 @@ class Fasta:
     def total_length(self) -> int:
         return sum([len(v) for v in self._fasta_content.values()])
 
-    def get_chromosome_length(self, chromosome_name:str) -> int:
+    def get_chromosome_length(self, chromosome_name: str) -> int:
         return len(self._fasta_content[chromosome_name])
+
 
 def get_reversed_complementary(fasta_bytes: bytes) -> bytes:
     return fasta_bytes.translate(_FASTA_COMP_TRANS)[::-1]
