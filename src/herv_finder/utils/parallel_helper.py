@@ -26,7 +26,7 @@ class ParallelJobQueue(threading.Thread):
     def __init__(self,
                  pool_name: str = "Unnamed pool",
                  pool_size: int = multiprocessing.cpu_count(),
-                 refresh_interval:float=0.01,
+                 refresh_interval: float = 0.01,
                  with_tqdm: bool = False):
         super().__init__()
         self.pool_size = pool_size
@@ -36,7 +36,7 @@ class ParallelJobQueue(threading.Thread):
         self.with_tqdm = with_tqdm
         self.pool_name = pool_name
         self.running_job_queue = []
-        self.refresh_interval=refresh_interval
+        self.refresh_interval = refresh_interval
 
     def run(self):
         def _scan_through_process():
@@ -88,4 +88,4 @@ class ParallelJobQueue(threading.Thread):
 
     @property
     def all_finished(self) -> bool:
-        return len(self.pending_job_queue)+len(self.running_job_queue) ==0
+        return len(self.pending_job_queue) + len(self.running_job_queue) == 0

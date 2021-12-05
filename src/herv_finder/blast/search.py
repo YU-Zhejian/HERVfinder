@@ -2,6 +2,7 @@ import gc
 import itertools
 import logging
 import multiprocessing
+import os
 import queue
 from typing import Optional
 
@@ -13,7 +14,7 @@ from herv_finder.blast import indexer, blast_anchors_type, \
     blast_extended_anchor_type, blast_extended_anchors_type, blast_anchor_type
 from herv_finder.utils import in_memory_fasta, parallel_helper
 
-EXTENDER_BATCH_SIZE = 1000
+EXTENDER_BATCH_SIZE = 100
 """After generation of anchors of this number, submit them to the queue."""
 
 
@@ -67,7 +68,7 @@ class _ExtendWorkerProcess(multiprocessing.Process):
     def __init__(self, anchors_to_extend: blast_anchors_type,
                  needle_fasta_filename: str,
                  haystack_fasta_name: str,
-                 word_len:int,
+                 word_len: int,
                  output_queue: multiprocessing.Queue
                  ):
         super().__init__()
@@ -77,7 +78,7 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         self.output_queue = output_queue
         self.logger_handler = logging.getLogger("Worker")
         self.logger_handler.debug(self.__repr__())
-        self.word_len=word_len
+        self.word_len = word_len
 
     def extend(self, raw_anchor: blast_anchor_type) -> blast_extended_anchor_type:
         # print(raw_anchor)
@@ -132,13 +133,13 @@ class BlastIndexSearcher:
                  needle_index: indexer.InMemorySimpleBlastIndex,
                  haystack_index: indexer.BlastIndex,
                  pool_len: Optional[int] = multiprocessing.cpu_count(),
-                 extend_batch_size:Optional[int] = EXTENDER_BATCH_SIZE
+                 extend_batch_size: Optional[int] = EXTENDER_BATCH_SIZE
                  ):
         self._pool_len = pool_len
         """Internal thread number"""
         self.haystack_index = haystack_index
         self.needle_index = needle_index
-        self.extend_batch_size=extend_batch_size
+        self.extend_batch_size = extend_batch_size
 
     def generate_raw_anchors(self) -> blast_anchors_type:
         """Generate a series of anchors"""
@@ -161,27 +162,27 @@ class BlastIndexSearcher:
         """"""
         this_manager = multiprocessing.Manager()
         output_queue = this_manager.Queue()
-        this_batch=[]
+        this_batch = []
         process_pool = parallel_helper.ParallelJobQueue(
             pool_name="Extending",
             pool_size=self._pool_len,
             with_tqdm=True
         )
-        worker_args={
-            "needle_fasta_filename" : self.needle_index.fasta_filename,
-                                    "haystack_fasta_name" : self.haystack_index.fasta_filename,
-                                                          "word_len" : self.needle_index.word_len,
-                                                                     "output_queue" : output_queue
+        worker_args = {
+            "needle_fasta_filename": self.needle_index.fasta_filename,
+            "haystack_fasta_name": self.haystack_index.fasta_filename,
+            "word_len": self.needle_index.word_len,
+            "output_queue": output_queue
         }
         for raw_anchor in raw_anchors:
-            if len(this_batch)<self.extend_batch_size:
+            if len(this_batch) < self.extend_batch_size:
                 this_batch.append(raw_anchor)
             else:
                 ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch, **worker_args)
                 process_pool.append(ewp)
-                this_batch=[]
+                this_batch = []
         if len(this_batch) > 0:
-            ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch,**worker_args)
+            ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch, **worker_args)
             process_pool.append(ewp)
         process_pool.start()
         while not process_pool.all_finished:
@@ -239,17 +240,23 @@ def _test_on_e_coli():
     haystack_index.attach_fasta("test/e_coli.fasta")
     # haystack_index.create_index()
 
-    searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
+    searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index, extend_batch_size=1000)
     raw_anchors = searcher.generate_raw_anchors()
-    with open("1.log","w") as writer:
+    with open("1.log", "w") as writer:
         for item in searcher.extend(raw_anchors):
-            writer.write(str(item[2])+'\n')
+            writer.write(str(item[2]) + '\n')
 
 
 def _test_on_test():
+    index_filename = "test/herv.pkl.xz"
     needle_index = indexer.InMemorySimpleBlastIndex()
     needle_index.attach_fasta("test/herv.fasta")
-    needle_index.create_index()
+    if os.path.exists(index_filename):
+        needle_index.load(index_filename)
+    else:
+        needle_index.create_index()
+        needle_index.save(index_filename)
+    needle_index.save("test/herv.pkl.xz")
     haystack_index = indexer.BlastIndex("test/test")
     haystack_index.attach_fasta("test/test.fasta")
     # haystack_index.create_index()

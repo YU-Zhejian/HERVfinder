@@ -230,6 +230,12 @@ class InMemorySimpleBlastIndex(_BaseBlastIndex):
         super().__init__(word_len=word_len, prefix_len=prefix_len)
         self.logger_handler.info("InMemorySimpleBlastIndex initializing...")
 
+    def save(self, filename:str):
+        compressed_pickle.dump(self._indices, filename)
+
+    def load(self, filename: str):
+        self._indices = compressed_pickle.load_with_tqdm(filename)
+
     def create_index(self):
         tmp_dict = defaultdict(lambda: [])
         self._indices = {}
