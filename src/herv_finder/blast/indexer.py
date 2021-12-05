@@ -1,4 +1,5 @@
 """A general-purposed multi-processed BLAST index creator"""
+import gc
 import glob
 import logging
 import multiprocessing
@@ -369,7 +370,8 @@ class BlastIndex(_BaseBlastIndex):
             two_mers = in_memory_fasta.get_all_kmers(self.prefix_len, bases=b'AGCT')
         for two_mer in two_mers:
             try:
-                self._indices.pop(two_mer)
+                del self._indices[two_mer]
+                gc.collect()
             except KeyError:
                 pass
         self._update_total_index_count()

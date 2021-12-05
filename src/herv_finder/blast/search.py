@@ -3,8 +3,10 @@ import itertools
 import logging
 import multiprocessing
 import os
+import pickle
 import queue
-from typing import Optional
+import tempfile
+from typing import Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +18,15 @@ from herv_finder.utils import in_memory_fasta, parallel_helper
 
 EXTENDER_BATCH_SIZE = 100
 """After generation of anchors of this number, submit them to the queue."""
+
+
+def simple_blast_scores(b1: bytes, b2: bytes) -> int:
+    assert len(b1) == len(b2)
+    score = 2 * len(b1)
+    for i_b, j_b in zip(b1, b2):
+        if i_b != j_b:
+            score -= 1
+    return score
 
 
 def blast_score(b1: bytes, b2: bytes) -> int:
@@ -65,16 +76,18 @@ def visualize_anchors(anchors: blast_anchors_type,
 
 
 class _ExtendWorkerProcess(multiprocessing.Process):
-    def __init__(self, anchors_to_extend: blast_anchors_type,
+    def __init__(self, anchors_to_extend: Union[str, blast_anchors_type],
                  needle_fasta_filename: str,
-                 haystack_fasta_name: str,
+                 haystack_fasta_filename: str,
                  word_len: int,
                  output_queue: multiprocessing.Queue
                  ):
         super().__init__()
+        self.haystack_fasta = None
+        self.needle_fasta = None
         self.anchors_to_extend = anchors_to_extend
-        self.needle_fasta = in_memory_fasta.Fasta(needle_fasta_filename)
-        self.haystack_fasta = in_memory_fasta.Fasta(haystack_fasta_name)
+        self.needle_fasta_filename = needle_fasta_filename
+        self.haystack_fasta_filename = haystack_fasta_filename
         self.output_queue = output_queue
         self.logger_handler = logging.getLogger("Worker")
         self.logger_handler.debug(self.__repr__())
@@ -91,23 +104,44 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         max_coordinate = (needle_start, needle_end, haystack_start, haystack_end)
         needle_full_length = self.needle_fasta.get_chromosome_length(needle_chromosome)
         haystack_full_length = self.haystack_fasta.get_chromosome_length(haystack_chromosome)
-        needle_starts = range(max(0, needle_start - needle_len), needle_start)
-        needle_ends = range(needle_end, min(needle_full_length, needle_end + needle_len))
-        haystack_starts = range(max(0, haystack_start - needle_len), haystack_start)
-        haystack_ends = range(haystack_end, min(haystack_full_length, haystack_end + needle_len))
-        # print(needle_end, min(needle_full_length, needle_end + needle_len))
-        # print(list(needle_starts),list(needle_ends),list(haystack_starts),list(haystack_ends))
-        for available_coordinate in itertools.product(needle_starts, needle_ends, haystack_starts, haystack_ends):
-            # print(available_coordinate)
-            needle_bytes = self.needle_fasta.get(needle_chromosome, available_coordinate[0],
-                                                 available_coordinate[1], needle_strand)
-            haystack_bytes = self.haystack_fasta.get(haystack_chromosome, available_coordinate[2],
-                                                     available_coordinate[3], haystack_strand)
-            score = blast_score(needle_bytes, haystack_bytes)
-            # print(score)
+        left_extendable_len = min(needle_start, haystack_start)
+        right_extendable_len = min(needle_full_length - needle_end, haystack_full_length - haystack_end)
+        # Extend bi-direction
+        while left_extendable_len > 0 and \
+                right_extendable_len > 0:
+            needle_start -= 1
+            haystack_start -= 1
+            left_extendable_len -= 1
+            needle_end += 1
+            haystack_end += 1
+            right_extendable_len -= 1
+            needle_bytes = self.needle_fasta.get(
+                needle_chromosome,
+                needle_start,
+                needle_end,
+                needle_strand)
+            haystack_bytes = self.haystack_fasta.get(
+                haystack_chromosome,
+                haystack_start,
+                haystack_end,
+                haystack_strand)
+            # for available_coordinate in itertools.product(needle_starts, needle_ends, haystack_starts, haystack_ends):
+            #     needle_bytes = self.needle_fasta.get(
+            #         needle_chromosome,
+            #         available_coordinate[0],
+            #         available_coordinate[1],
+            #         needle_strand)
+            #     haystack_bytes = self.haystack_fasta.get(
+            #         haystack_chromosome,
+            #         available_coordinate[2],
+            #         available_coordinate[3],
+            #         haystack_strand)
+            score = simple_blast_scores(needle_bytes, haystack_bytes)
             if score > max_score:
                 max_score = score
-                max_coordinate = available_coordinate
+                max_coordinate = (needle_start, needle_end, haystack_start, haystack_end)
+            elif score < 0:
+                break
         return (
             (needle_chromosome, needle_strand, max_coordinate[0], max_coordinate[1] - max_coordinate[0]),
             (haystack_chromosome, haystack_strand, max_coordinate[2], max_coordinate[3] - max_coordinate[2]),
@@ -115,6 +149,12 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         )
 
     def run(self):
+        self.needle_fasta = in_memory_fasta.Fasta(self.needle_fasta_filename)
+        self.haystack_fasta = in_memory_fasta.Fasta(self.haystack_fasta_filename)
+        if isinstance(self.anchors_to_extend, str):
+            pkl_filename = self.anchors_to_extend
+            self.anchors_to_extend = pickle.load(open(pkl_filename, "rb"))
+            os.remove(pkl_filename)
         for alignment in self.anchors_to_extend:
             self.output_queue.put(self.extend(alignment))
         self.logger_handler.debug("FIN")
@@ -145,7 +185,7 @@ class BlastIndexSearcher:
         """Generate a series of anchors"""
         haystack_available_prefixes = self.haystack_index.available_prefixes
         needle_words = self.needle_index.loaded_words
-        for needle_prefix in tqdm.tqdm(iterable=self.needle_index.loaded_prefixes):
+        for needle_prefix in tqdm.tqdm(desc="Anchoring...", iterable=self.needle_index.loaded_prefixes):
             if needle_prefix not in haystack_available_prefixes:
                 continue
             self.haystack_index.read_index([needle_prefix])
@@ -157,6 +197,7 @@ class BlastIndexSearcher:
                         self.haystack_index.get(needle_word)
                 ):
                     yield needle_location, haystack_location
+            self.haystack_index.drop_index([needle_prefix])
 
     def extend(self, raw_anchors: blast_anchors_type) -> blast_extended_anchors_type:
         """"""
@@ -170,20 +211,30 @@ class BlastIndexSearcher:
         )
         worker_args = {
             "needle_fasta_filename": self.needle_index.fasta_filename,
-            "haystack_fasta_name": self.haystack_index.fasta_filename,
+            "haystack_fasta_filename": self.haystack_index.fasta_filename,
             "word_len": self.needle_index.word_len,
             "output_queue": output_queue
         }
+        tmp_dir = tempfile.mkdtemp()
+        n_anchor = 0
         for raw_anchor in raw_anchors:
             if len(this_batch) < self.extend_batch_size:
                 this_batch.append(raw_anchor)
             else:
-                ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch, **worker_args)
-                process_pool.append(ewp)
+                pickle.dump(this_batch, open(os.path.join(tmp_dir, f"{n_anchor}.pkl"), "wb"))
+                del this_batch
+                gc.collect()
                 this_batch = []
+                n_anchor += 1
         if len(this_batch) > 0:
-            ewp = _ExtendWorkerProcess(anchors_to_extend=this_batch, **worker_args)
+            pickle.dump(this_batch, open(os.path.join(tmp_dir, f"{n_anchor}.pkl"), "wb"))
+            del this_batch
+            gc.collect()
+            n_anchor += 1
+        for i in range(n_anchor):
+            ewp = _ExtendWorkerProcess(anchors_to_extend=os.path.join(tmp_dir, f"{i}.pkl"), **worker_args)
             process_pool.append(ewp)
+
         process_pool.start()
         while not process_pool.all_finished:
             try:
@@ -193,17 +244,17 @@ class BlastIndexSearcher:
             except (TimeoutError, queue.Empty):
                 pass
         process_pool.join()
+        this_manager.shutdown()
+        os.rmdir(tmp_dir)
 
     def extend_single_thread(self, raw_anchors: blast_anchors_type) -> blast_extended_anchors_type:
         raw_anchors = list(raw_anchors)
         this_manager = multiprocessing.Manager()
         output_queue = this_manager.Queue()
-        ewp = _ExtendWorkerProcess(
-            anchors_to_extend=raw_anchors,
-            needle_fasta_filename=self.needle_index.fasta_filename,
-            haystack_fasta_name=self.haystack_index.fasta_filename,
-            word_len=self.needle_index.word_len,
-            output_queue=output_queue)
+        ewp = _ExtendWorkerProcess(anchors_to_extend=raw_anchors,
+                                   needle_fasta_filename=self.needle_index.fasta_filename,
+                                   haystack_fasta_filename=self.haystack_index.fasta_filename,
+                                   word_len=self.needle_index.word_len, output_queue=output_queue)
         ewp.start()
         with tqdm.tqdm(total=len(raw_anchors)) as pbar:
             while ewp.is_alive():
@@ -218,6 +269,15 @@ class BlastIndexSearcher:
         ewp.close()
         this_manager.shutdown()
         gc.collect()
+
+    def filter_extended_anchors(
+            self,
+            extended_anchors:blast_extended_anchors_type,
+            score_slope:int = 1.5,
+            score_intersect:int = 0
+            ):
+        for extended_anchor in extended_anchors:
+            pass
 
 
 def _test_tiny():
@@ -238,8 +298,6 @@ def _test_on_e_coli():
     needle_index.create_index()
     haystack_index = indexer.BlastIndex("test/e_coli", word_len=5, prefix_len=1)
     haystack_index.attach_fasta("test/e_coli.fasta")
-    # haystack_index.create_index()
-
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index, extend_batch_size=1000)
     raw_anchors = searcher.generate_raw_anchors()
     with open("1.log", "w") as writer:
@@ -256,13 +314,9 @@ def _test_on_test():
     else:
         needle_index.create_index()
         needle_index.save(index_filename)
-    needle_index.save("test/herv.pkl.xz")
     haystack_index = indexer.BlastIndex("test/test")
     haystack_index.attach_fasta("test/test.fasta")
-    # haystack_index.create_index()
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
-    # for anchor in searcher.generate_raw_anchors():
-    #     print(anchor[0][2],anchor[1][2])
     raw_anchors = searcher.generate_raw_anchors()
     with open("1.log", "w") as writer:
         for item in searcher.extend(raw_anchors):
