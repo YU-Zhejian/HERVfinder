@@ -6,6 +6,7 @@ import os
 import pickle
 import queue
 import tempfile
+from collections import defaultdict
 from typing import Optional, Union
 
 import matplotlib.pyplot as plt
@@ -19,6 +20,15 @@ from herv_finder.utils import in_memory_fasta, parallel_helper
 EXTENDER_BATCH_SIZE = 100
 """After generation of anchors of this number, submit them to the queue."""
 
+
+def strand_to_str(strand:bool) -> str:
+    if strand:
+        return '+'
+    else:
+        return '-'
+
+def extended_anchor_to_gtf(extended_anchor: blast_extended_anchor_type) -> str:
+    return f"{extended_anchor[1][0]}\tHERVfinder\texon\t{extended_anchor[1][2]}\t{extended_anchor[1][2]+extended_anchor[1][3]}\t{extended_anchor[2]}\t{strand_to_str(extended_anchor[1][1])}\t.\tgene_id \"{extended_anchor[0][0]}\";"
 
 def simple_blast_scores(b1: bytes, b2: bytes) -> int:
     assert len(b1) == len(b2)
@@ -75,12 +85,33 @@ def visualize_anchors(anchors: blast_anchors_type,
     plt.show()
 
 
+def merge_adjacent_anchors(
+        extended_anchors: blast_extended_anchors_type
+) -> blast_extended_anchors_type:
+    """
+    Merge adjacent anchors.
+    """
+    anchor_dict = defaultdict(set)
+    """Dict[needle_chromosome, needle_strand, haystack_chromosome, haystack_strand], 
+    List[needle_start, needle_len, haystack_start, haystack_len]]"""
+    for anchor in extended_anchors:
+        anchor_dict[(anchor[0][0], anchor[0][1], anchor[1][0], anchor[1][1])].add(
+            (anchor[0][2], anchor[0][3], anchor[1][2], anchor[1][3])
+        )
+    for k, v in anchor_dict.items():
+        while len(v) > 0:
+            tmp_merge_base = v.pop()
+            yield (k[0], k[1], tmp_merge_base[0],tmp_merge_base[1]), (k[2], k[3], tmp_merge_base[2],tmp_merge_base[3]), 100 # rescore needed
+
+
 class _ExtendWorkerProcess(multiprocessing.Process):
     def __init__(self, anchors_to_extend: Union[str, blast_anchors_type],
                  needle_fasta_filename: str,
                  haystack_fasta_filename: str,
                  word_len: int,
-                 output_queue: multiprocessing.Queue
+                 output_queue: multiprocessing.Queue,
+                 score_cutoff_slope:float,
+                 score_cutoff_intersect:float
                  ):
         super().__init__()
         self.haystack_fasta = None
@@ -92,8 +123,10 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         self.logger_handler = logging.getLogger("Worker")
         self.logger_handler.debug(self.__repr__())
         self.word_len = word_len
+        self.score_cutoff_slope = score_cutoff_slope
+        self.score_cutoff_intersect = score_cutoff_intersect
 
-    def extend(self, raw_anchor: blast_anchor_type) -> blast_extended_anchor_type:
+    def extend(self, raw_anchor: blast_anchor_type) -> Optional[blast_extended_anchor_type]:
         # print(raw_anchor)
         needle_len = self.word_len
         needle_chromosome, needle_strand, needle_start = raw_anchor[0]
@@ -104,9 +137,11 @@ class _ExtendWorkerProcess(multiprocessing.Process):
         max_coordinate = (needle_start, needle_end, haystack_start, haystack_end)
         needle_full_length = self.needle_fasta.get_chromosome_length(needle_chromosome)
         haystack_full_length = self.haystack_fasta.get_chromosome_length(haystack_chromosome)
+        cutoff_score = self.score_cutoff_slope * needle_full_length + self.score_cutoff_intersect
+
+        # Extend bi-direction
         left_extendable_len = min(needle_start, haystack_start)
         right_extendable_len = min(needle_full_length - needle_end, haystack_full_length - haystack_end)
-        # Extend bi-direction
         while left_extendable_len > 0 and \
                 right_extendable_len > 0:
             needle_start -= 1
@@ -125,28 +160,20 @@ class _ExtendWorkerProcess(multiprocessing.Process):
                 haystack_start,
                 haystack_end,
                 haystack_strand)
-            # for available_coordinate in itertools.product(needle_starts, needle_ends, haystack_starts, haystack_ends):
-            #     needle_bytes = self.needle_fasta.get(
-            #         needle_chromosome,
-            #         available_coordinate[0],
-            #         available_coordinate[1],
-            #         needle_strand)
-            #     haystack_bytes = self.haystack_fasta.get(
-            #         haystack_chromosome,
-            #         available_coordinate[2],
-            #         available_coordinate[3],
-            #         haystack_strand)
             score = simple_blast_scores(needle_bytes, haystack_bytes)
             if score > max_score:
                 max_score = score
                 max_coordinate = (needle_start, needle_end, haystack_start, haystack_end)
             elif score < 0:
                 break
-        return (
-            (needle_chromosome, needle_strand, max_coordinate[0], max_coordinate[1] - max_coordinate[0]),
-            (haystack_chromosome, haystack_strand, max_coordinate[2], max_coordinate[3] - max_coordinate[2]),
-            max_score
-        )
+        if max_score > cutoff_score:
+            return (
+                (needle_chromosome, needle_strand, max_coordinate[0], max_coordinate[1] - max_coordinate[0]),
+                (haystack_chromosome, haystack_strand, max_coordinate[2], max_coordinate[3] - max_coordinate[2]),
+                max_score
+            )
+        else:
+            return None
 
     def run(self):
         self.needle_fasta = in_memory_fasta.Fasta(self.needle_fasta_filename)
@@ -156,7 +183,9 @@ class _ExtendWorkerProcess(multiprocessing.Process):
             self.anchors_to_extend = pickle.load(open(pkl_filename, "rb"))
             os.remove(pkl_filename)
         for alignment in self.anchors_to_extend:
-            self.output_queue.put(self.extend(alignment))
+            extended_anchor = self.extend(alignment)
+            if extended_anchor is not None:
+                self.output_queue.put(extended_anchor)
         self.logger_handler.debug("FIN")
 
     def __repr__(self):
@@ -199,7 +228,11 @@ class BlastIndexSearcher:
                     yield needle_location, haystack_location
             self.haystack_index.drop_index([needle_prefix])
 
-    def extend(self, raw_anchors: blast_anchors_type) -> blast_extended_anchors_type:
+    def extend(self,
+               raw_anchors: blast_anchors_type,
+               score_cutoff_slope:float = 1.5,
+               score_cutoff_intersect:float = 0.0,
+               ) -> blast_extended_anchors_type:
         """"""
         this_manager = multiprocessing.Manager()
         output_queue = this_manager.Queue()
@@ -213,7 +246,9 @@ class BlastIndexSearcher:
             "needle_fasta_filename": self.needle_index.fasta_filename,
             "haystack_fasta_filename": self.haystack_index.fasta_filename,
             "word_len": self.needle_index.word_len,
-            "output_queue": output_queue
+            "output_queue": output_queue,
+            "score_cutoff_slope" : score_cutoff_slope,
+            "score_cutoff_intersect" : score_cutoff_intersect
         }
         tmp_dir = tempfile.mkdtemp()
         n_anchor = 0
@@ -270,15 +305,6 @@ class BlastIndexSearcher:
         this_manager.shutdown()
         gc.collect()
 
-    def filter_extended_anchors(
-            self,
-            extended_anchors:blast_extended_anchors_type,
-            score_slope:int = 1.5,
-            score_intersect:int = 0
-            ):
-        for extended_anchor in extended_anchors:
-            pass
-
 
 def _test_tiny():
     needle_index = indexer.InMemorySimpleBlastIndex()
@@ -318,9 +344,9 @@ def _test_on_test():
     haystack_index.attach_fasta("test/test.fasta")
     searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
     raw_anchors = searcher.generate_raw_anchors()
-    with open("1.log", "w") as writer:
-        for item in searcher.extend(raw_anchors):
-            writer.write(str(item[2]) + '\n')
+    with open("1.gtf", "w") as writer:
+        for item in merge_adjacent_anchors(searcher.extend(raw_anchors)):
+            writer.write(extended_anchor_to_gtf(item) + '\n')
 
 
 if __name__ == "__main__":

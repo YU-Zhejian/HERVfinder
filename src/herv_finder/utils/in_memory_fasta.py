@@ -1,6 +1,7 @@
 """
 A general-purposed bytes-based memory-access read-only FASTA class with GZip support.
 """
+import functools
 import gzip
 import itertools
 import logging
@@ -110,6 +111,7 @@ class Fasta:
     def total_length(self) -> int:
         return sum([len(v) for v in self._fasta_content.values()])
 
+    @functools.lru_cache()
     def get_chromosome_length(self, chromosome_name: str) -> int:
         return len(self._fasta_content[chromosome_name])
 
