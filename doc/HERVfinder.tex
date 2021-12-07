@@ -37,7 +37,9 @@ The index is built with the purpose of finding all locations of a specific word 
 
 As is known to us all, DNA sequences are combinations of 4 nucleotides. Here we refer a single nucleotide as a \textbf{letter}, and all possible values of the letters forms an \textbf{alphabet} of length $A$. We define \textbf{words} as combinations of defined number (called \textbf{word length}, $w$) of letters inside the alphabet. This alphabet can generate a \textbf{word set} of length $A^{w}$.
 
-The \textbf{location} of a specific word inside a genome can be represented by tuple (chromosome, strand, starting-position). For example, the last position of chromosome 1 (which should be some tuple like \verb|(b'NC_000001.11', True, 249000000)| if using NCBI index) consumes 64 bytes of memory.
+The \textbf{location} of a specific word inside a genome can be represented by tuple (chromosome, strand, starting-position). For example, the last position of chromosome 1 (which should be some tuple like \verb|(b'NC_000001.11', True, 249000000)| if using NCBI index) consumes 277 bytes of memory.
+
+% FIXME: Data changed
 
 With the sliding window method, we may build an \textbf{simple index}, which is a hashmap with word as key and a list of locations of that key word inside a genome as value. Based on the original BLAST article, $w$ is default to 11, spending 33.11MiB in the memory, and is neglectable. The total memory consumption of all locations inside chromosome 1 may raise up to 14.83 GiB with 195.03 GiB for the entire human genome\footnote{This is calculated from the data given by NCBI, with 3, 272.09Mbp genome length and 248.96Mbp chromosome 1 length.}.
 
