@@ -1,6 +1,7 @@
 """
 A general-purposed bytes-based memory-access read-only FASTA class with GZip support.
 """
+import functools
 import gzip
 import itertools
 import logging
@@ -43,7 +44,7 @@ class Fasta:
     """
 
     def __init__(self, filename: str):
-        logger_handler.info(f"Creating FASTA from {filename}...")
+        logger_handler.debug(f"Creating FASTA from {filename}...")
         self.filename = os.path.abspath(os.path.expanduser(filename))
         """The absolute path of Fasta."""
 
@@ -56,7 +57,7 @@ class Fasta:
         """
 
         self._load()
-        logger_handler.info(f"FASTA load complete")
+        logger_handler.debug(f"FASTA load complete")
 
     def _load(self):
         """Read the fasta file and load it into memory."""
@@ -109,6 +110,10 @@ class Fasta:
     @property
     def total_length(self) -> int:
         return sum([len(v) for v in self._fasta_content.values()])
+
+    @functools.lru_cache()
+    def get_chromosome_length(self, chromosome_name: str) -> int:
+        return len(self._fasta_content[chromosome_name])
 
 
 def get_reversed_complementary(fasta_bytes: bytes) -> bytes:
