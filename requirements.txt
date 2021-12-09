@@ -1,5 +1,5 @@
 requests
 tqdm
-matplotlib
-
+# matplotlib
+cython
 numpy
