@@ -49,7 +49,7 @@ def download_stream(writer: BinaryIO, url: str):
     logger_handler.info(f"Retrieving {url} FIN")
 
 
-def get_chr1_chr2_fasta():
+def get_chr21_chr22_fasta():
     final_test_fa_filename = "test.fasta"
     if os.path.exists(final_test_fa_filename):
         return
@@ -106,7 +106,7 @@ def get_herv_tsv():
 
 def main():
     os.chdir(os.path.dirname(__file__))
-    get_chr1_chr2_fasta()
+    get_chr21_chr22_fasta()
     get_e_coli_fasta()
     get_herv_seq()
     get_herv_tsv()

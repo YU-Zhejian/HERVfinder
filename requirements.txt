@@ -2,4 +2,5 @@ requests
 tqdm
 # matplotlib
 cython
-numpy
+# numpy
+setuptools

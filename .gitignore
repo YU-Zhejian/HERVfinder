@@ -18,6 +18,9 @@ tracer.log
 *.so
 *.html
 *.c
+/build/
+/dist/
+*.egg-info/
 
 # =================== JetBrains ===================
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider
