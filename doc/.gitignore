@@ -13,6 +13,7 @@
 *tmp*
 *.synctex*
 *.toc
+*.png
 _minted*
 .idea/
 

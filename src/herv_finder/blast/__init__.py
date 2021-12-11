@@ -1,4 +1,4 @@
-from typing import List, Dict, Tuple, Iterable
+from typing import List, Dict, Tuple
 
 blast_index_location_type = Tuple[str, bool, int]
 """

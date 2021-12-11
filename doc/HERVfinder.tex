@@ -2,9 +2,6 @@
 
 \title{HERVfinder -- A BLAST-Based Multi-Thread HERV Finder}
 \author{Group 12}
-% \IEEEspecialpapernotice{Proposal}
-
-% \IEEEpubid{Proposal}
 
 \newcommand{\warn}{\textbf{WARNING:}\space}
 \newcommand{\info}{\textbf{INFO:}\space}
@@ -16,6 +13,7 @@
 \usepackage{hologo}
 \usepackage{float}
 \usepackage{hyperref}
+\usepackage{graphicx}
 \begin{document}
 \sloppy{}\flushbottom\maketitle\tableofcontents
 \section{Introduction}
@@ -24,7 +22,7 @@
 
 The problem of finding HERV inside the human genome can be considered as a problem of \textbf{un-gapped sequence alignment} or \textbf{state prediction}. Approach to the first problem may consider Basic Local Alignment Search Tool (BLAST)-like seed-and-extend algorithms or suffix tree with mismatch using Burrows-Wheeler Transform (BWT) with Ferragina-Manzini (FM) Index, with another using machine-learning based approach like Hidden Markov Models (HMM).
 
-So, we proposed to develop \verb|HERVfinder|, which is a bioinformatics software that can identify the HERV sequences inside the human reference genome or other genome assemblies in FASTA format. It will take HERV consensus sequence FASTA downloaded from Dfam and un- or soft-masked assembled human genome FASTA sequence as input, and produce a tabular file containing all HERV loci in BED or GTF format. This application should run on any computer with Python (CPython implementation) 3.7+. Users may also specify selected HERV types, the number of mismatches allowed or the number of threads used.
+So, we proposed to develop \verb|HERVfinder|, which is a bioinformatics software that can identify the HERV sequences inside the human reference genome or other genome assemblies in FASTA format. It will take HERV consensus sequence FASTA downloaded from Dfam and un- or soft-masked assembled human genome FASTA sequence as input, and produce a tabular file containing all HERV loci in BED or GTF format. This application should run on any computer with Python (CPython implementation) 3.7+. Users may also specify the score model or the number of threads used.
 
 
 \section{Design of Algorithm}
@@ -38,8 +36,6 @@ The index is built with the purpose of finding all locations of a specific word 
 As is known to us all, DNA sequences are combinations of 4 nucleotides. Here we refer a single nucleotide as a \textbf{letter}, and all possible values of the letters forms an \textbf{alphabet} of length $A$. We define \textbf{words} as combinations of defined number (called \textbf{word length}, $w$) of letters inside the alphabet. This alphabet can generate a \textbf{word set} of length $A^{w}$.
 
 The \textbf{location} of a specific word inside a genome can be represented by tuple (chromosome, strand, starting-position). For example, the last position of chromosome 1 (which should be some tuple like \verb|(b'NC_000001.11', True, 249000000)| if using NCBI index) consumes 277 bytes of memory.
-
-% FIXME: Data changed
 
 With the sliding window method, we may build an \textbf{simple index}, which is a hashmap with word as key and a list of locations of that key word inside a genome as value. Based on the original BLAST article, $w$ is default to 11, spending 33.11MiB in the memory, and is neglectable. The total memory consumption of all locations inside chromosome 1 may raise up to 14.83 GiB with 195.03 GiB for the entire human genome\footnote{This is calculated from the data given by NCBI, with 3, 272.09Mbp genome length and 248.96Mbp chromosome 1 length.}.
 
@@ -57,13 +53,17 @@ It is evident that the needle length should exceed the word length, so there may
 
 \subsection{The \textbf{Extending} Phase}
 
+The extending phase is a
+
+\subsection{The \textbf{Merging} Phase}
+
 \subsection{Parallelism}
 
-Parallelism using multi-thread or multi-process is the core of the fast speed of BLAST and we never over-state its importance. Compared to single-threaded implementation, the multi-threaded approach is far more challenging by aspects like memory inconsistency, large memory use, inefficient scheduler and much much more.
+Parallelism using multi-thread or multi-process is the core of the fast speed of BLAST and we never over-state its importance. Compared to single-threaded implementation, the multi-threaded approach is far more challenging by aspects like memory inconsistency, large memory use, inefficient scheduler and much much more. The author would strongly consider the parallelism a part of the algorithm.
 
 Due to the existence of Global Interpretation Lock (GIL), the Python interpreter can execute only one Python machine code at a time, which makes multi-threading or co-routine useless for computation-intensive tasks. So, the general design of parallelism inside the algorithm is that for \textbf{computation-intensive tasks}, the program will use multi-process provided by \verb|multiprocessing| stdlib; for \textbf{IO-intensive tasks}, the program will use multi-threading provided by \verb|threading| stdlib. \verb|asyncio| stdlib is hard-to-use and may contaminate the entire program, so not used.
 
-
+Memory problems are solved with file partition and limiting the number of processes used. Part of files are serialized using \verb|pickle| stdlib and garbage collector is manually invoked using \verb|del| builtin and \verb|gc| stdlib. A general-purposed First-In-First-Out (FIFO) job pool is designed and implemented.
 
 \section{Implementation}
 
@@ -77,22 +77,38 @@ Due to the existence of Global Interpretation Lock (GIL), the Python interpreter
 
 FASTA file of the haystack is loaded into memory and split into \textbf{chunks} with \textbf{chunk length} at 2, 000, 000 bp. They are indexed in parallel. The \textbf{chunk-level indices} are further split by the leading $l$ bases, pickled and saved to a temporary directory. Once finished, the indices are re-joint by leading $l$ bases and are separately saved using compressed pickle.
 
-The parallelism makes it possible to utilize all CPU cores. MEMORY CONSUMPTION DATA NEEDED.
+The parallelism makes it possible to utilize all CPU cores.
 
 \subsection{The Anchoring Phase}
+
+
 
 \subsection{The Extending Phase}
 
 They are then extended using Smith-Waterman-Gotoh-alike gap-aware local-alignment algorithms in parallel using dynamic programming. The extension is dropped if the score drops below a threshold, or accepted if the needle is found. The accepted loci are finally collected and transmitted to BED or GTF format and saved to disk.
 
+\subsection{The \textbf{Merging} Phase}
 
 
+
+\section{Results}
+
+\subsection{The Answer}
+
+The standard answer from RepeatMasker was retrived from UCSC\ref{fig:answerlendistrib}. A GTF File is loaded with:
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\linewidth]{answer_len_distrib}
+    \caption{Length Distribution of RepeatMasker}
+    \label{fig:answerlendistrib}
+\end{figure}
 
 
 
 
 \section{Discussion}
 
-The algorithm BLAST is chosen for this project because its implementation is relatively easy. However, it is not that suitable to search for repetitive sequences. To overcome this problem, a second version using HMM is proposed. The HMM version includes generation of HMM from consensus sequence, apply it on the human reference genome and matrix acceleration using Numpy or Nvidia Cuda.
+The algorithm BLAST is chosen for this project because its implementation is relatively easy. However, it is not that suitable to search for repetitive sequences. To overcome this problem, a second version using HMM is proposed. The HMM version includes generation of HMM from consensus sequence, apply it on the human reference genome and matrix acceleration using Numpy, Intel Math Kernel Library (MKL) or Nvidia Cuda.
 
 \end{document}

@@ -23,7 +23,7 @@ def _parse_args(args: List[str]) -> argparse.Namespace:
     parser.add_argument('-R', '--reference_fasta', type=str,
                         help="Fasta for (a subset of) human reference genome sequence", required=True)
     parser.add_argument('-I', '--index', type=str, help="Basename of HERVfinder Blast index", required=True)
-    parser.add_argument('-P', '--process', type=int, help="Number of process to use", required=False,
+    parser.add_argument('-P', '--pool_len', type=int, help="Number of process to use", required=False,
                         default=os.cpu_count())
     parser.add_argument('--prefix_len', type=int, help="Prefix length of splitted index", required=False,
                         default=blast.DEFAULT_PREFIX_LEN)
@@ -56,6 +56,7 @@ def _search(
 ):
     needle_index = indexer.InMemorySimpleBlastIndex(word_len=word_len, prefix_len=prefix_len)
     needle_index.attach_fasta(herv_fasta)
+    needle_index.create_index()
     haystack_index = indexer.BlastIndex(index, word_len=word_len, prefix_len=prefix_len)
     haystack_index.attach_fasta(reference_fasta)
     searcher = search.BlastIndexSearcher(
@@ -89,7 +90,6 @@ def _index(
     )
     bi.attach_fasta(reference_fasta)
     bi.create_index()
-    bi.validate_index()
 
 
 def main(args: List[str]) -> int:

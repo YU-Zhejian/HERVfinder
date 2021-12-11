@@ -231,7 +231,7 @@ class InMemorySimpleBlastIndex(_BaseBlastIndex):
         super().__init__(word_len=word_len, prefix_len=prefix_len)
         self.logger_handler.info("InMemorySimpleBlastIndex initializing...")
 
-    def save(self, filename:str):
+    def save(self, filename: str):
         compressed_pickle.dump(self._indices, filename)
 
     def load(self, filename: str):
@@ -386,44 +386,3 @@ class BlastIndex(_BaseBlastIndex):
             if os.path.exists(f"{self.basename}_{kmer_str}.pkl.xz"):
                 retl.append(two_mer)
         return retl
-
-
-def _base_test(bi: BlastIndex):
-    bi.create_index()
-    bi.read_index()
-    bi.validate_index()
-    bi.detach_fasta()
-    print(bi.get_stats())
-
-
-def _test_on_tiny():
-    bi = BlastIndex(basename='test/tiny', word_len=4, chunk_len=20)
-    bi.attach_fasta('test/tiny.fasta')
-    _base_test(bi)
-    # print(bi.show_index())
-    sbi = InMemorySimpleBlastIndex(word_len=4)
-    sbi.attach_fasta('test/tiny.fasta')
-    sbi.create_index()
-    sbi.validate_index()
-    sbi.detach_fasta()
-    print(sbi.get_stats())
-
-
-def _test_on_e_coli():
-    bi = BlastIndex(basename='test/e_coli', word_len=4)
-    bi.attach_fasta('test/e_coli.fasta')
-    _base_test(bi)
-
-
-def _test_on_test():
-    bi = BlastIndex(basename='test/test', pool_len=multiprocessing.cpu_count() // 1)
-    bi.attach_fasta('test/test.fasta')
-    _base_test(bi)
-
-
-if __name__ == '__main__':
-    for fn in glob.glob('test/*.pkl.xz'):
-        os.remove(fn)
-    _test_on_tiny()
-    _test_on_e_coli()
-    _test_on_test()
