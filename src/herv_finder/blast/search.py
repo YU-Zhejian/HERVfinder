@@ -92,7 +92,7 @@ class _ExtendWorkerProcess(multiprocessing.Process):
             elif score < 0:
                 break
         anchor.needle_start, anchor.haystack_start = max_start
-        max_score= 0
+        max_score = 0
         while anchor.needle_end < needle_full_length and anchor.haystack_end < haystack_full_length:
             anchor.needle_end += 1
             anchor.haystack_end += 1
@@ -175,7 +175,7 @@ class BlastIndexSearcher:
                             txt_writer.write(str(raw_anchor) + "\n")
                             gtf_writer.write(raw_anchor.to_gtf() + "\n")
                             yield raw_anchor
-            self.haystack_index.drop_index([needle_prefix])
+                    self.haystack_index.drop_index([needle_prefix])
 
     def extend(self,
                raw_anchors: Iterable[BlastAnchor],
@@ -287,50 +287,3 @@ class BlastIndexSearcher:
                     yield current_anchor
                     txt_writer.write(str(current_anchor) + "\n")
                     gtf_writer.write(current_anchor.to_gtf() + "\n")
-
-
-def _test_tiny():
-    needle_index = indexer.InMemorySimpleBlastIndex()
-    needle_index.attach_fasta("test/tiny_needle.fasta")
-    needle_index.create_index()
-    haystack_index = indexer.BlastIndex("test/tiny")
-    haystack_index.attach_fasta("test/tiny.fasta")
-    haystack_index.create_index()
-    searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
-    for anchor in searcher.generate_raw_anchors():
-        print(anchor)
-
-
-def _test_on_e_coli():
-    index_filename = "test/e_coli_needle.pkl.xz"
-    needle_index = indexer.InMemorySimpleBlastIndex(word_len=5, prefix_len=2)
-    needle_index.attach_fasta("test/e_coli_needle.fasta")
-    if os.path.exists(index_filename):
-        needle_index.load(index_filename)
-    else:
-        needle_index.create_index()
-        needle_index.save(index_filename)
-    haystack_index = indexer.BlastIndex("test/e_coli", word_len=5, prefix_len=2)
-    haystack_index.attach_fasta("test/e_coli.fasta")
-    # haystack_index.create_index()
-    searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
-    searcher.merge_overlapping_anchors(searcher.extend(searcher.generate_raw_anchors()))
-
-
-def _test_on_test():
-    index_filename = "test/herv.pkl.xz"
-    needle_index = indexer.InMemorySimpleBlastIndex()
-    needle_index.attach_fasta("test/herv.fasta")
-    if os.path.exists(index_filename):
-        needle_index.load(index_filename)
-    else:
-        needle_index.create_index()
-        needle_index.save(index_filename)
-    haystack_index = indexer.BlastIndex("test/test")
-    haystack_index.attach_fasta("test/test.fasta")
-    searcher = BlastIndexSearcher(needle_index=needle_index, haystack_index=haystack_index)
-    _ = list(searcher.merge_overlapping_anchors(searcher.extend(searcher.generate_raw_anchors())))
-
-
-if __name__ == "__main__":
-    _test_on_test()

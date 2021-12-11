@@ -1,5 +1,8 @@
+# Readme for HERVfinder
 
+See LaTeX documentations in `doc/` folder.
 
+## Dependencies
 
 This project is designed and tested in Debian GNU/Linux 11, but it may also run in other systems.
 

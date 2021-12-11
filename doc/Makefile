@@ -17,5 +17,8 @@ pdf:
 	pdflatex $(LATEX_OPTS) $(DOC)
 	pdflatex $(LATEX_OPTS) $(DOC)
 
+answer_len_distrib.png:
+	Rscript get_len_distrib.R
+
 clean:
 	rm -rf *.aux *.fdb_latexmk *.fls *.log *.out *.pdf *.synctex* *.toc
